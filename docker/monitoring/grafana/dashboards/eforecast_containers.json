@@ -1,0 +1,31 @@
+{
+  "title": "eforecast containers",
+  "uid": "eforecast-containers",
+  "description": "Every container on this machine, from cAdvisor: the stack's own, and a worker's while it runs. The alerts: troubleshooting section 7.",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "templating": {"list": []},
+  "panels": [
+    {"type": "table", "title": "Containers now", "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+     "datasource": {"type": "prometheus", "uid": "prometheus"},
+     "targets": [{"refId": "A", "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name!=\"\"}[2m]))", "format": "table", "instant": true}, {"refId": "B", "expr": "max by (name) (container_memory_working_set_bytes{name!=\"\"})", "format": "table", "instant": true}, {"refId": "C", "expr": "max by (name) (container_start_time_seconds{name!=\"\"}) * 1000", "format": "table", "instant": true}, {"refId": "D", "expr": "max by (name) (changes(container_start_time_seconds{name!=\"\"}[24h]))", "format": "table", "instant": true}, {"refId": "E", "expr": "max by (name) (increase(container_oom_events_total{name!=\"\"}[24h]))", "format": "table", "instant": true}],
+     "transformations": [{"id": "merge", "options": {}}, {"id": "organize", "options": {"excludeByName": {"Time": true}, "renameByName": {"name": "container", "Value #A": "CPU (cores)", "Value #B": "memory", "Value #C": "running since", "Value #D": "restarts (24 h)", "Value #E": "killed for memory (24 h)"}}}],
+     "fieldConfig": {"defaults": {}, "overrides": [{"matcher": {"id": "byName", "options": "memory"}, "properties": [{"id": "unit", "value": "bytes"}]}, {"matcher": {"id": "byName", "options": "running since"}, "properties": [{"id": "unit", "value": "dateTimeAsIso"}]}, {"matcher": {"id": "byName", "options": "CPU (cores)"}, "properties": [{"id": "decimals", "value": 2}]}]}},
+    {"type": "timeseries", "title": "CPU per container (cores)", "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+     "datasource": {"type": "prometheus", "uid": "prometheus"},
+     "targets": [{"expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name!=\"\"}[2m]))", "legendFormat": "{{name}}"}]},
+    {"type": "timeseries", "title": "Memory per container", "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+     "datasource": {"type": "prometheus", "uid": "prometheus"},
+     "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+     "targets": [{"expr": "max by (name) (container_memory_working_set_bytes{name!=\"\"})", "legendFormat": "{{name}}"}]},
+    {"type": "timeseries", "title": "Network per container (in, out)", "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+     "datasource": {"type": "prometheus", "uid": "prometheus"},
+     "fieldConfig": {"defaults": {"unit": "Bps"}, "overrides": []},
+     "targets": [{"expr": "sum by (name) (rate(container_network_receive_bytes_total{name!=\"\"}[2m]))", "legendFormat": "{{name}} in"}, {"expr": "sum by (name) (rate(container_network_transmit_bytes_total{name!=\"\"}[2m]))", "legendFormat": "{{name}} out"}]},
+    {"type": "timeseries", "title": "Disk reads and writes per container", "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+     "datasource": {"type": "prometheus", "uid": "prometheus"},
+     "fieldConfig": {"defaults": {"unit": "Bps"}, "overrides": []},
+     "targets": [{"expr": "sum by (name) (rate(container_fs_reads_bytes_total{name!=\"\"}[2m]))", "legendFormat": "{{name}} read"}, {"expr": "sum by (name) (rate(container_fs_writes_bytes_total{name!=\"\"}[2m]))", "legendFormat": "{{name}} write"}]}
+  ]
+}

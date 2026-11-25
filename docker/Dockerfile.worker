@@ -1,0 +1,43 @@
+# GPU training worker of the eforecast pipeline.
+#
+#   docker build -f docker/Dockerfile.worker -t eforecast-worker:latest .
+#
+# The worker needs the model tree and the NWP folders at the SAME absolute paths as
+# on the host (the task files written by the manager carry absolute paths), so run it
+# with bind mounts such as -v /media/smartrue/HHD1:/media/smartrue/HHD1.  See
+# docker/run_worker.sh and docs/gpu_training_optuna.md.
+# The base is pinned by digest, not by tag (A16-11).  This exact digest is the one every
+# worker build since A12 resolved -- it appears in five build logs under
+# docs/review/evidence/ -- so pinning it changes nothing today and stops a moved tag
+# changing a rebuild silently tomorrow.  Update it deliberately.
+FROM pytorch/pytorch:2.9.1-cuda12.8-cudnn9-runtime@sha256:7b324d212a4450795b49edba9949b7cdc72429148a64e974334bfe5774d51385
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTORCH_ALLOC_CONF=expandable_segments:True \
+    EFORECAST_HOME=/opt/eforecast
+
+# libgomp for lightgbm/catboost, libgl/glib for opencv, git for a few pip packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 libgl1 libglib2.0-0 git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/requirements-worker.txt /tmp/requirements-worker.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-worker.txt
+
+RUN mkdir /nwp
+RUN mkdir /models
+
+# the package, the legacy configuration modules and the entry scripts
+WORKDIR ${EFORECAST_HOME}
+COPY eforecast ${EFORECAST_HOME}/eforecast
+COPY eforecast_online ${EFORECAST_HOME}/eforecast_online
+COPY configuration ${EFORECAST_HOME}/configuration
+
+COPY run_datasets.py run_training.py run_combine.py run_model_script.py ${EFORECAST_HOME}/
+COPY run_site_graph.py run_inference.py ${EFORECAST_HOME}/
+
+# trials are started by docker/run_trial.sh (--entrypoint python .../trial_runner.py); the default
+# command shows the training entry point
+ENTRYPOINT ["python"]
+CMD ["run_training.py", "--help"]

@@ -1,0 +1,20 @@
+# eforecast-lagllama image lock -- A16-02
+#
+# Lag-Llama is not on PyPI; the package itself comes from the commit pinned in
+# docker/Dockerfile.lagllama.  These are the dependencies that commit's requirements.txt
+# implies, at the versions its gluonts ceiling forces.
+#
+# This set is the whole reason the image exists.  gluonts[torch]<=0.14.4 holds pandas at
+# 2.1.x and numpy at 1.26.x.  pipe_env runs pandas 3.0.3 and numpy 2.5.2 and cannot host
+# that; foundationforecast resolves at gluonts 0.17.0 and pandas 2.3.3 and cannot share it
+# (measured: ResolutionImpossible, docs/review/evidence/a16_task_02/).
+gluonts[torch]==0.14.4
+numpy==1.26.4
+pandas==2.1.4
+scipy
+torch
+huggingface_hub
+# wandb and matplotlib appear in the upstream requirements.txt but no forecast needs them.
+# wandb is experiment telemetry that would try to reach the network from an image meant to
+# run with --network none, so lag-llama is installed with --no-deps and this file is the
+# dependency set instead.

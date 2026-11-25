@@ -1,0 +1,251 @@
+# A16-06 alerts. Each one names a consequence and a runbook, because an alert that only says
+# what is true does not tell a non-specialist what to do about it.
+#
+# The rule that shapes all of them: `eforecast_source_up` is checked *before* any value from that
+# source. An absent or unreadable source fires its own alert; it never fires -- or silences --
+# a backlog alert with a reassuring zero.
+#
+# A broker and a cluster are optional venues. Where the installation does not use one,
+# `eforecast_source_configured` is 0 for it and its alert stays silent: on a workstation without
+# them they would otherwise fire for good and teach everyone to ignore alerts. Written as
+# `unless ... == 0`, not `and ... == 1`, so that an exporter too old to say still alerts.
+#
+# These rules reach Prometheus through the folder docker/compose.yaml mounts at
+# /etc/prometheus/rules. Until 20 November 2026 it mounted only prometheus.yml, and not one of
+# them was loaded. The runbook of each is a section of docs/troubleshooting.md.
+groups:
+  - name: eforecast-dispatch
+    interval: 30s
+    rules:
+      - alert: EforecastDispatchSourceUnreadable
+        expr: eforecast_source_up{source="dispatch"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The dispatch outbox cannot be read
+          consequence: >-
+            Nothing can be said about queued work. Backlog panels are blank, not zero, and no
+            backlog alert below can fire while this is true.
+          remedy: >-
+            Check the run store. `bin/eforecast doctor` reports the store and the dispatcher.
+          runbook: docs/troubleshooting.md#the-dispatch-outbox-cannot-be-read
+
+      - alert: EforecastDispatchStuck
+        expr: eforecast_dispatch_oldest_age_seconds > 600
+              and on() eforecast_source_up{source="dispatch"} == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Eligible work has waited over ten minutes to be published
+          consequence: >-
+            Tasks are eligible and recorded but not reaching a worker. Runs will show a dispatch
+            wait rather than failing, so nothing looks broken from the outside.
+          remedy: >-
+            Check the broker alert below first. If the broker is up, the publisher is not
+            draining: `bin/eforecast doctor` reports the configured dispatcher.
+          runbook: docs/troubleshooting.md#eligible-work-is-not-being-published
+
+      - alert: EforecastDeliveriesHeldOpen
+        expr: sum(eforecast_queue_unacknowledged) > 0
+              and on() eforecast_source_up{source="broker"} == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: The broker is holding deliveries open
+          consequence: >-
+            A short dispatcher claims and acknowledges in milliseconds, so this should be zero.
+            A delivery held for fifteen minutes means a consumer is doing work inside the
+            acknowledgement, which the broker will eventually time out and redeliver.
+          remedy: Find the consumer and restart it; the claim it already committed is durable.
+          runbook: docs/troubleshooting.md#deliveries-are-being-held-open
+
+      - alert: EforecastUndeliverableMessages
+        expr: eforecast_dispatch_undeliverable > 0
+              and on() eforecast_source_up{source="dispatch"} == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Messages that are not dispatches are arriving
+          consequence: >-
+            Something is publishing to the dispatch exchange that this version cannot read. Those
+            deliveries are recorded and dropped, so no work is lost, but no work is being done
+            by them either.
+          remedy: >-
+            Read the recorded reasons; a version mismatch between publisher and consumer is the
+            usual cause.
+          runbook: docs/troubleshooting.md#messages-that-are-not-dispatches
+
+  - name: eforecast-dependencies
+    interval: 30s
+    rules:
+      - alert: EforecastBrokerUnavailable
+        expr: eforecast_source_up{source="broker"} == 0
+              unless on(source) eforecast_source_configured == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The dispatch broker cannot be reached
+          consequence: >-
+            New work stays recorded and unpublished. Nothing is lost and nothing is duplicated;
+            runs show a visible dispatch wait until the broker returns.
+          remedy: Start the broker. Recorded dispatches republish themselves under the same identity.
+          runbook: docs/troubleshooting.md#the-broker-cannot-be-reached
+
+      - alert: EforecastClusterApiUnavailable
+        expr: eforecast_source_up{source="cluster"} == 0
+              unless on(source) eforecast_source_configured == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: The cluster API cannot be reached
+          consequence: >-
+            Running Jobs are unaffected, but none can be launched, observed or cancelled. An
+            attempt already handed off is recoverable; the executor reports unknown, never absent.
+          remedy: Check the API server and the executor's namespace-scoped token.
+          runbook: docs/troubleshooting.md#the-cluster-api-cannot-be-reached
+
+      # Not the orchestrator: it answers only while a training runs (`--metrics-port`), so its
+      # silence is the ordinary state between trainings, not a fault.
+      - alert: EforecastTelemetryMissing
+        expr: up{job=~"eforecast.*|dcgm|cadvisor"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: A monitoring target has stopped answering
+          consequence: >-
+            The panels fed by this target show no data. They are not showing healthy zeroes, but
+            an operator who does not look at this alert may read them as calm.
+          remedy: Check the exporter named in the alert's `instance` label.
+          runbook: docs/troubleshooting.md#a-monitoring-target-stopped-answering
+
+  - name: eforecast-capacity
+    interval: 30s
+    rules:
+      - alert: EforecastStoragePressure
+        expr: eforecast_storage_free_bytes / eforecast_storage_total_bytes < 0.10
+              and on() eforecast_source_up{source="storage"} == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: The workspace filesystem is over ninety percent full
+          consequence: >-
+            Dataset stages and trials will begin to fail on writes. A16-03 leaves no partial
+            artifact when that happens, so the failures are recoverable, but no work will finish.
+          remedy: Free space in the workspace, or move retained artifacts off it.
+          runbook: docs/troubleshooting.md#the-workspace-is-nearly-full
+
+      - alert: EforecastStorageUnreadable
+        expr: eforecast_source_up{source="storage"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: The workspace filesystem could not be stated
+          consequence: >-
+            Usually the workspace is not mounted. Nothing can run, and the free-space panel is
+            blank rather than zero.
+          remedy: Check the mount and `EFORECAST_WORKSPACE`.
+          runbook: docs/troubleshooting.md#the-workspace-cannot-be-stated
+
+      - alert: EforecastPodsPendingTooLong
+        expr: eforecast_cluster_pods_pending_seconds > 900
+              and on() eforecast_source_up{source="cluster"} == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: A worker Pod has been pending for over fifteen minutes
+          consequence: >-
+            The attempt holds no resources and has started nothing, so it is safe -- but it is
+            also not progressing, and the run shows an admission or image wait.
+          remedy: >-
+            The executor's status says which: no node can take it, the image cannot be pulled, or
+            a volume cannot be mounted.
+          runbook: docs/troubleshooting.md#a-pod-stays-pending
+
+      - alert: EforecastLostWorkerContact
+        expr: eforecast_runs_waiting{wait="worker"} > 0
+              and on() eforecast_source_up{source="runs"} == 1
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: A run has been waiting for worker contact for twenty minutes
+          consequence: >-
+            The attempt may be alive and quiet, or gone. A09 recovery owns it either way, so it
+            will not be launched twice, but nothing is being observed from it.
+          remedy: >-
+            `bin/eforecast doctor` names the attempt and whether its executor is still alive.
+          runbook: docs/troubleshooting.md#a-run-has-lost-worker-contact
+
+      - alert: EforecastCleanupOwed
+        expr: eforecast_cleanup_pending > 0
+              and on() eforecast_source_up{source="runs"} == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Cleanup has been owed for half an hour
+          consequence: >-
+            A run that ended or was stopped may still have processes or containers of its own
+            alive, holding a card, memory or disk that the next run expects to find free.
+          remedy: >-
+            `bin/eforecast doctor` lists owed cleanup and the attempt that owes it.
+          runbook: docs/troubleshooting.md#cleanup-is-owed
+
+  - name: eforecast-containers
+    interval: 30s
+    rules:
+      # The stack's own containers, by name. Prometheus cannot report itself; while cAdvisor is
+      # down this stays silent and EforecastTelemetryMissing names cAdvisor instead.
+      - alert: EforecastServiceContainerDown
+        expr: (absent(container_last_seen{name="eforecast-postgres-1"})
+              or absent(container_last_seen{name="eforecast-grafana-1"})
+              or absent(container_last_seen{name="eforecast-optuna-dashboard-1"})
+              or absent(container_last_seen{name="eforecast-dcgm-exporter-1"}))
+              and on() up{job="cadvisor"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A container of the monitoring and study stack is not running
+          consequence: >-
+            Without PostgreSQL the studies kept there and the Optuna dashboard stop; without
+            Grafana the dashboards; without the DCGM exporter every GPU panel is blank.
+          remedy: >-
+            `docker ps -a` says how it ended and `docker logs <name>` why; start it again with
+            `docker compose -f docker/compose.yaml --env-file docker/.env up -d <service>`.
+          runbook: docs/troubleshooting.md#a-container-is-not-running
+
+      - alert: EforecastContainerRestarting
+        expr: changes(container_start_time_seconds{name=~"eforecast-.+"}[30m]) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: A container keeps restarting
+          consequence: >-
+            Docker starts it again each time it ends, so it looks up most of the time while what
+            it serves keeps failing.
+          remedy: "`docker logs <name>` shows why it ends."
+          runbook: docs/troubleshooting.md#a-container-keeps-restarting
+
+      - alert: EforecastContainerOutOfMemory
+        expr: increase(container_oom_events_total{name!=""}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: The kernel ended a process in a container for lack of memory
+          consequence: >-
+            What that process was doing is lost: a worker's task fails, a service restarts.
+          remedy: >-
+            The memory panel of the dashboard "eforecast containers" shows what grew; give the
+            container more memory, or run less beside it.
+          runbook: docs/troubleshooting.md#a-container-ran-out-of-memory

@@ -1,0 +1,100 @@
+# A16-06: the existing DCGM/orchestrator scrape, plus the broker, the cluster and the
+# application's own durable-state endpoint.
+#
+# `eforecast_source_up` is what separates "unavailable" from "zero activity", so every rule that
+# reads a value checks it first -- see rules/eforecast.yml and its promtool unit tests.
+global:
+  scrape_interval: 15s
+  # Long enough that a slow durable-state query is a slow scrape, not a missing one.
+  scrape_timeout: 10s
+
+rule_files:
+  - /etc/prometheus/rules/eforecast.yml
+
+scrape_configs:
+  - job_name: dcgm
+    # GPU utilisation, memory, temperature and power per card. The exporter labels by physical
+    # UUID, which is the only device identity the rest of this system will accept.
+    static_configs:
+      - targets: ["dcgm-exporter:9400"]
+
+  - job_name: cadvisor
+    # Every container: CPU, memory, disk and network, when it started, and whether the kernel
+    # ended something in it for lack of memory (docker/compose.yaml, service `cadvisor`). Only
+    # what the dashboard "eforecast containers" and the alerts read is kept: 194 of its 803 series.
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_spec_memory_limit_bytes|container_network_(receive|transmit)_bytes_total|container_fs_(reads|writes)_bytes_total|container_start_time_seconds|container_last_seen|container_oom_events_total|machine_cpu_cores|machine_memory_bytes
+        action: keep
+
+  - job_name: orchestrator
+    # the training orchestrator on the host exposes /metrics while it runs (EFORECAST_METRICS_PORT, default 9108)
+    static_configs:
+      - targets: ["host.docker.internal:9108"]
+
+  - job_name: eforecast-app
+    # A16-06's durable-state exposition: outbox backlog and age, dispatch waits, failures by
+    # classification, verified completions, owed cleanup, workspace capacity. Bounded to 52
+    # series by construction (eforecast/config/fleet_metrics.py), so ordinary completed work
+    # never grows the series count.
+    # This and the orchestrator are processes on the host, reached from this container through
+    # the host's firewall: where one runs, it must let the monitoring network in on 9108 and 9109
+    # (docs/installation.md §2.7). Without that this target is DOWN, "context deadline exceeded".
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9109"]
+
+  - job_name: trials
+    # The trials training on this machine now, with their error after every epoch: the metrics
+    # service reads them from the trial processes (eforecast/config/trial_progress.py), so for any
+    # training, whatever version of the code started it. The same service and port as above.
+    metrics_path: /trials
+    static_configs:
+      - targets: ["host.docker.internal:9109"]
+
+  - job_name: processes
+    # Every process of the pipeline with what it uses (processor time, memory, card memory,
+    # reads and writes), the heaviest other processes, the machine as a whole, and whether a
+    # card is slowing itself down for heat (eforecast/config/process_watch.py). The same service
+    # and port as above.
+    metrics_path: /processes
+    static_configs:
+      - targets: ["host.docker.internal:9109"]
+
+  - job_name: studies
+    # What every study of the workspace's cases has done and has left: its trials by how they
+    # ended, how many are wanted, the best value, and the trials that finished last
+    # (eforecast/config/study_progress.py). The service reads the studies in the background once
+    # a minute, so a scrape more often than that says nothing new.
+    metrics_path: /studies
+    scrape_interval: 60s
+    static_configs:
+      - targets: ["host.docker.internal:9109"]
+
+  - job_name: rabbitmq
+    # RabbitMQ's own Prometheus plugin, enabled with:
+    #   rabbitmq-plugins enable rabbitmq_prometheus
+    # Its queue depths are the broker's view; `eforecast_queue_*` is ours. They are scraped
+    # separately on purpose: when they disagree, that disagreement is the finding.
+    # Left empty until the broker runs (`docker compose up -d rabbitmq`), like the cluster below.
+    # Without it the target is DOWN for good -- and the name `rabbitmq`, which no container then
+    # answers to, is looked up in the office's DNS: on 20 November 2026 that knew a machine of
+    # that name, and Prometheus knocked on it every 15 seconds.
+    static_configs:
+      - targets: []
+    # - targets: ["rabbitmq:15692"]
+
+  - job_name: kubernetes-nodes
+    # Node and Pod state for the worker pilot. Scraped through the API server's read-only proxy
+    # with the same namespace-scoped token the executor uses, so monitoring needs no extra
+    # privilege. Left commented until a cluster exists, because an unreachable target would fire
+    # EforecastTelemetryMissing forever and teach everyone to ignore it.
+    static_configs:
+      - targets: []
+    # - targets: ["kubernetes.default.svc:443"]
+    #   scheme: https
+    #   bearer_token_file: /etc/prometheus/secrets/kube_token
+    #   tls_config:
+    #     ca_file: /etc/prometheus/secrets/kube_ca.crt

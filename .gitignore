@@ -1,0 +1,35 @@
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+# IDE, tools, session state
+.idea/
+# secrets
+*.pem
+*.key
+docker/.env
+# the OpenWeather API key: a credential, never repository content
+eforecast/nwp_extraction/openweather_key.json
+# third-party sample data shipped inside the spacetimeformer vendor copy
+**/STFormer/spacetimeformer/data/
+**/STFormer/spacetimeformer/images/
+# run artefacts
+*.log
+*.pickle
+*.pt
+# local configuration with plant identities, coordinates, capacities and machine paths: kept out of the repository
+configuration/cases/
+configuration/config.py
+configuration/config_project.py
+configuration/config_input_data.py
+configuration/config_methods.py
+configuration/config_utils.py
+# development scratch
+eforecast/boruta.ipynb
+eforecast/boruta_fix.py
+# web UI build and dependencies
+webui/node_modules/
+webui/dist/
+
+# pilot run records: they carry the AWS account id and instance identifiers
+deploy/aws/evidence/

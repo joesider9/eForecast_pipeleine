@@ -1,0 +1,1165 @@
+{
+  "$defs": {
+    "DataConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "nwp_data_merge": {
+          "items": {},
+          "title": "Nwp Data Merge",
+          "type": "array"
+        },
+        "compress_data": {
+          "items": {},
+          "title": "Compress Data",
+          "type": "array"
+        },
+        "img_data": {
+          "items": {},
+          "title": "Img Data",
+          "type": "array"
+        },
+        "scale_row_method": {
+          "items": {},
+          "title": "Scale Row Method",
+          "type": "array"
+        },
+        "scale_img_method": {
+          "items": {},
+          "title": "Scale Img Method",
+          "type": "array"
+        },
+        "scale_nwp_method": {
+          "items": {},
+          "title": "Scale Nwp Method",
+          "type": "array"
+        },
+        "scale_target_method": {
+          "default": "maxabs",
+          "title": "Scale Target Method",
+          "type": "string"
+        },
+        "use_data_before_and_after_target": {
+          "default": true,
+          "title": "Use Data Before And After Target",
+          "type": "boolean"
+        },
+        "nwp_selection_policy": {
+          "default": "as_of",
+          "description": "as_of uses the newest analysis cycle available at the sample issue time; legacy_merge reproduces datasets built before this choice existed.",
+          "enum": [
+            "as_of",
+            "legacy_merge"
+          ],
+          "title": "Nwp Selection Policy",
+          "type": "string"
+        },
+        "nwp_availability_hours": {
+          "default": 0.0,
+          "description": "How long after its analysis time a cycle can be read. 0 keeps only the necessary constraint; declare the provider delay to be exact.",
+          "maximum": 48,
+          "minimum": 0,
+          "title": "Nwp Availability Hours",
+          "type": "number"
+        },
+        "remove_night_hours": {
+          "default": true,
+          "title": "Remove Night Hours",
+          "type": "boolean"
+        },
+        "use_polars": {
+          "default": false,
+          "title": "Use Polars",
+          "type": "boolean"
+        },
+        "global_past_lags": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Global Past Lags"
+        },
+        "global_future_lags": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Global Future Lags"
+        },
+        "time_merge_variables": {
+          "additionalProperties": true,
+          "title": "Time Merge Variables",
+          "type": "object"
+        },
+        "variables": {
+          "items": {
+            "$ref": "#/$defs/VariableConfig"
+          },
+          "title": "Variables",
+          "type": "array"
+        },
+        "target_variable": {
+          "$ref": "#/$defs/TargetVariableConfig"
+        }
+      },
+      "required": [
+        "target_variable"
+      ],
+      "title": "DataConfig",
+      "type": "object"
+    },
+    "FoldersConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "pycharm_path": {
+          "title": "Pycharm Path",
+          "type": "string"
+        },
+        "sys_folder": {
+          "title": "Sys Folder",
+          "type": "string"
+        },
+        "nwp_folder": {
+          "title": "Nwp Folder",
+          "type": "string"
+        },
+        "sat_folder": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sat Folder"
+        },
+        "path_image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path Image"
+        },
+        "check_exists": {
+          "default": false,
+          "title": "Check Exists",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pycharm_path",
+        "sys_folder",
+        "nwp_folder"
+      ],
+      "title": "FoldersConfig",
+      "type": "object"
+    },
+    "HorizonType": {
+      "description": "What the case forecasts, and therefore how its rows and targets are shaped.\n\n``day_ahead``   one value per hour of the next day, issued once a day\n``intraday``    the remaining hours of the current day, issued through the day\n``short_term``  ``horizon`` steps ahead of every issue time, one row per step (multi-output)\n``long_term``   up to three days ahead, indexed by (prediction time, issue time); this is\n                also the former ``two-day-ahead`` case, whose window it contains\n\nThe names were ``day-ahead``, ``intra-ahead``, ``multi-output`` and ``multi-ahead``.  Both\nspellings are accepted so cases written before the rename keep loading; the new one is what is\nwritten back and what the pipeline compares against.",
+      "enum": [
+        "day_ahead",
+        "intraday",
+        "short_term",
+        "long_term"
+      ],
+      "title": "HorizonType",
+      "type": "string"
+    },
+    "JobsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "model_cache_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "prefer-local",
+                "online",
+                "offline",
+                "prewarmed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional pretrained-model access policy. prefer-local and online download a model that is not on the machine; offline and prewarmed never do. Null inherits EFORECAST_MODEL_CACHE_MODE.",
+          "title": "Model Cache Mode"
+        },
+        "n_cpus": {
+          "default": 16,
+          "description": "CPUs the CPU studies of a run use between them, never more than this process may use.",
+          "minimum": 1,
+          "title": "N Cpus",
+          "type": "integer"
+        },
+        "cpu_workers": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "CPU studies that run side by side. Empty (null): as many as there are studies, up to one a CPU. Trials inside a study stay serial.",
+          "title": "Cpu Workers"
+        },
+        "cpu_study_threads": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Most threads a study uses. Empty (null): the CPUs are divided among the studies running, and a study is given the threads of the ones that finish.",
+          "title": "Cpu Study Threads"
+        },
+        "cpu_study_device": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Device preference of foundation studies: cpu, auto, cuda, cuda:N or a GPU UUID. Empty (null) inherits each family. A preference no visible card answers runs on the CPU.",
+          "title": "Cpu Study Device"
+        },
+        "n_jobs": {
+          "default": 16,
+          "description": "Workers in dataset/preprocessing process pools.",
+          "minimum": 1,
+          "title": "N Jobs",
+          "type": "integer"
+        },
+        "n_jobs_rbfnn": {
+          "default": 3,
+          "description": "Legacy setting; current GPU concurrency uses method_params.<family>.n_jobs.",
+          "minimum": 1,
+          "title": "N Jobs Rbfnn",
+          "type": "integer"
+        },
+        "n_jobs_lstm": {
+          "default": 2,
+          "description": "Legacy setting; current GPU concurrency uses method_params.LSTM.n_jobs.",
+          "minimum": 1,
+          "title": "N Jobs Lstm",
+          "type": "integer"
+        },
+        "n_jobs_cnn_3d": {
+          "default": 2,
+          "description": "Legacy setting; current GPU concurrency uses method_params.CNN.n_jobs.",
+          "minimum": 1,
+          "title": "N Jobs Cnn 3D",
+          "type": "integer"
+        },
+        "n_jobs_cnn": {
+          "default": 2,
+          "description": "Legacy setting; current GPU concurrency uses method_params.CNN.n_jobs.",
+          "minimum": 1,
+          "title": "N Jobs Cnn",
+          "type": "integer"
+        },
+        "n_jobs_mlp": {
+          "default": 3,
+          "description": "Legacy setting; current GPU concurrency uses method_params.MLP.n_jobs.",
+          "minimum": 1,
+          "title": "N Jobs Mlp",
+          "type": "integer"
+        },
+        "intra_op": {
+          "default": 2,
+          "description": "Legacy framework setting, stored for compatibility; not applied by the current Torch trainer.",
+          "minimum": 1,
+          "title": "Intra Op",
+          "type": "integer"
+        },
+        "n_gpus": {
+          "default": 2,
+          "description": "Default GPU count for deep training. Zero permits CPU-only configuration; --gpus can override it.",
+          "minimum": 0,
+          "title": "N Gpus",
+          "type": "integer"
+        }
+      },
+      "title": "JobsConfig",
+      "type": "object"
+    },
+    "LayerParam": {
+      "additionalProperties": false,
+      "description": "One parameter of one layer: a fixed value, a set of choices, or a numeric range.\n\n``choice`` and ``range`` are search dimensions -- Optuna picks a value per trial\n(:func:`eforecast.training.command_line.search_space.SearchSpace.define_structure_space`);\n``fixed`` is used as it stands.  Shorthands accepted on input and normalised here:\n\n    size: 64                    ->  {tag: fixed,  value: 64}\n    filters: {choices: [16,32]} ->  {tag: choice, value: [16, 32]}\n    pool: {range: [1, 3]}       ->  {tag: range,  value: [1, 3]}",
+      "properties": {
+        "tag": {
+          "default": "fixed",
+          "enum": [
+            "fixed",
+            "choice",
+            "range"
+          ],
+          "title": "Tag",
+          "type": "string"
+        },
+        "value": {
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "title": "LayerParam",
+      "type": "object"
+    },
+    "MethodsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "env_name": {
+          "default": "",
+          "deprecated": true,
+          "description": "Preserved for compatibility. This does not select the interpreter; see the runtime readiness report.",
+          "readOnly": true,
+          "title": "Legacy environment name",
+          "type": "string"
+        },
+        "path_env": {
+          "default": "",
+          "deprecated": true,
+          "description": "Preserved for compatibility. Runs use the configured runtime, not this stored path.",
+          "readOnly": true,
+          "title": "Legacy interpreter path",
+          "type": "string"
+        },
+        "runtime_ids": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Advanced: approved runtime ids by method, or default. Empty preserves current execution. Use native for the existing interpreter; other ids require a maintainer registry and executor support.",
+          "title": "Runtime Ids",
+          "type": "object"
+        },
+        "backend": {
+          "title": "Backend",
+          "type": "string"
+        },
+        "cpu_scope": {
+          "default": "clusters",
+          "description": "Shallow CPU training scope. Legacy cases keep cluster-only training; global uses enabled shallow global_methods.",
+          "enum": [
+            "global",
+            "clusters",
+            "both"
+          ],
+          "title": "Cpu Scope",
+          "type": "string"
+        },
+        "methods_cpu": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "title": "Methods Cpu",
+          "type": "object"
+        },
+        "cluster_methods": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "title": "Cluster Methods",
+          "type": "object"
+        },
+        "global_methods": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "title": "Global Methods",
+          "type": "object"
+        },
+        "transfer_learning": {
+          "default": false,
+          "title": "Transfer Learning",
+          "type": "boolean"
+        },
+        "transfer_learning_from": {
+          "additionalProperties": true,
+          "title": "Transfer Learning From",
+          "type": "object"
+        },
+        "transfer_learning_merge_data": {
+          "default": true,
+          "title": "Transfer Learning Merge Data",
+          "type": "boolean"
+        },
+        "feature_selection_methods": {
+          "items": {},
+          "title": "Feature Selection Methods",
+          "type": "array"
+        },
+        "combine_methods": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Combine Methods",
+          "type": "array"
+        },
+        "max_performance": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "default": 2,
+          "gt": 0,
+          "title": "Max Performance"
+        },
+        "val_test_ratio": {
+          "default": 0.125,
+          "exclusiveMaximum": 0.5,
+          "exclusiveMinimum": 0,
+          "title": "Val Test Ratio",
+          "type": "number"
+        },
+        "keep_best_models": {
+          "default": 4,
+          "minimum": 1,
+          "title": "Keep Best Models",
+          "type": "integer"
+        },
+        "selection_fraction": {
+          "default": 0.5,
+          "exclusiveMaximum": 1,
+          "exclusiveMinimum": 0,
+          "title": "Selection Fraction",
+          "type": "number"
+        },
+        "calibration_fraction": {
+          "default": 0.3,
+          "description": "Share of the selection slice reserved for fitting prediction intervals; 0 fits them on the selection slice, which under-covers.",
+          "exclusiveMaximum": 1,
+          "minimum": 0,
+          "title": "Calibration Fraction",
+          "type": "number"
+        },
+        "cluster_coverage_policy": {
+          "default": "fallback_global",
+          "description": "Timestamps no selected cluster covers: complete them from the global model as a separate predictor, or abstain and report the gap.",
+          "enum": [
+            "fallback_global",
+            "abstain"
+          ],
+          "title": "Cluster Coverage Policy",
+          "type": "string"
+        },
+        "interval_coverage": {
+          "default": [
+            0.8,
+            0.9
+          ],
+          "items": {
+            "exclusiveMaximum": 1,
+            "exclusiveMinimum": 0,
+            "type": "number"
+          },
+          "title": "Interval Coverage",
+          "type": "array"
+        },
+        "CVs": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Cvs",
+          "type": "integer"
+        },
+        "split_seed": {
+          "default": 1,
+          "description": "Seed for date splits and default training/search randomness.",
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Split Seed",
+          "type": "integer"
+        },
+        "split_policy": {
+          "default": "frozen",
+          "description": "How the train/validation/test partition reaches the learned components. \"frozen\": the global split is drawn once and every cluster takes the intersection of it with its membership, and feature selection is fitted on train and assessed on validation, so nothing selects a model on data the clusterer or the selector has seen. \"legacy_resplit\": the behaviour of models trained before 2026-10-13, where the cluster stage redrew the whole partition after the clusterer was fitted and feature selection was assessed on the internal test mask. Use it only to reproduce such a model.",
+          "enum": [
+            "frozen",
+            "legacy_resplit"
+          ],
+          "title": "Split Policy",
+          "type": "string"
+        },
+        "kernels": {
+          "additionalProperties": true,
+          "title": "Kernels",
+          "type": "object"
+        },
+        "base_data_types": {
+          "additionalProperties": true,
+          "title": "Base Data Types",
+          "type": "object"
+        },
+        "method_params": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Method Params",
+          "type": "object"
+        }
+      },
+      "required": [
+        "backend"
+      ],
+      "title": "MethodsConfig",
+      "type": "object"
+    },
+    "NetworkExperimentConfig": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/$defs/NetworkLayerConfig"
+        },
+        "type": "array"
+      },
+      "title": "NetworkExperimentConfig",
+      "type": "object"
+    },
+    "NetworkLayerConfig": {
+      "additionalProperties": false,
+      "description": "A layer of an experiment: its type and every parameter underneath ``params``.\n\nThere is no ``size`` field of its own any more -- the width, the kernel or the attention name is\n``params.size`` like every other parameter, so all of them can be fixed or searched the same way.\nThe older forms (``[type, size]``, a top-level ``size`` / ``choices`` / ``range``, bare extra\nkeys) are still read and folded into ``params``.",
+      "properties": {
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "params": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LayerParam"
+          },
+          "title": "Params",
+          "type": "object"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "NetworkLayerConfig",
+      "type": "object"
+    },
+    "NwpModelConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolution"
+        },
+        "levels": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Levels"
+        },
+        "path_nwp_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path Nwp Source"
+        },
+        "path_nwp_gdrive": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Link of the shared Google Drive folder that holds the YYYYMMDD day folders of this provider. A day that is not in path_nwp_source is downloaded from it when extract runs, read into its daily pickle, and the downloaded files are removed; path_nwp_source is where they are kept meanwhile. Empty (null): only the local folder is read.",
+          "title": "Path Nwp Gdrive"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "NwpModelConfig",
+      "type": "object"
+    },
+    "ProblemType": {
+      "enum": [
+        "pv",
+        "wind",
+        "load",
+        "FA"
+      ],
+      "title": "ProblemType",
+      "type": "string"
+    },
+    "ProjectConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "group": {
+          "title": "Group",
+          "type": "string"
+        },
+        "owner": {
+          "title": "Owner",
+          "type": "string"
+        },
+        "version_model": {
+          "minimum": 0,
+          "title": "Version Model",
+          "type": "integer"
+        },
+        "version_group": {
+          "minimum": 0,
+          "title": "Version Group",
+          "type": "integer"
+        },
+        "horizon_type": {
+          "$ref": "#/$defs/HorizonType"
+        },
+        "horizon": {
+          "title": "Horizon",
+          "type": "integer"
+        },
+        "coordinates": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": true,
+              "type": "object"
+            }
+          ],
+          "title": "Coordinates"
+        },
+        "area_group": {
+          "items": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "title": "Area Group",
+          "type": "array"
+        },
+        "use_images": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Use Images"
+        },
+        "image_coord": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Coord"
+        },
+        "image_size": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Size"
+        },
+        "site_indices": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Site Indices"
+        },
+        "rated_power": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "gt": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rated Power"
+        },
+        "type": {
+          "$ref": "#/$defs/ProblemType"
+        },
+        "filename": {
+          "title": "Filename",
+          "type": "string"
+        },
+        "evaluation_start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evaluation Start"
+        },
+        "local_timezone": {
+          "default": "UTC",
+          "title": "Local Timezone",
+          "type": "string"
+        },
+        "site_timezone": {
+          "default": "UTC",
+          "title": "Site Timezone",
+          "type": "string"
+        },
+        "country": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Country"
+        },
+        "ts_resolution": {
+          "title": "Ts Resolution",
+          "type": "string"
+        },
+        "is_global": {
+          "default": false,
+          "title": "Is Global",
+          "type": "boolean"
+        },
+        "is_fuzzy": {
+          "default": false,
+          "title": "Is Fuzzy",
+          "type": "boolean"
+        },
+        "is_probabilistic": {
+          "default": false,
+          "title": "Is Probabilistic",
+          "type": "boolean"
+        },
+        "docker": {
+          "default": false,
+          "title": "Docker",
+          "type": "boolean"
+        },
+        "nwp_models": {
+          "items": {
+            "$ref": "#/$defs/NwpModelConfig"
+          },
+          "title": "Nwp Models",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "group",
+        "owner",
+        "version_model",
+        "version_group",
+        "horizon_type",
+        "horizon",
+        "coordinates",
+        "area_group",
+        "type",
+        "filename",
+        "ts_resolution"
+      ],
+      "title": "ProjectConfig",
+      "type": "object"
+    },
+    "TargetVariableConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "lags": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lags"
+        },
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Columns",
+          "type": "array"
+        },
+        "transformer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transformer"
+        },
+        "transformer_params": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transformer Params"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "columns"
+      ],
+      "title": "TargetVariableConfig",
+      "type": "object"
+    },
+    "VariableConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "default": "nwp",
+          "title": "Type",
+          "type": "string"
+        },
+        "source": {
+          "default": "grib",
+          "title": "Source",
+          "type": "string"
+        },
+        "lags": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lags"
+        },
+        "timezone": {
+          "default": "UTC",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "transformer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transformer"
+        },
+        "transformer_params": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transformer Params"
+        },
+        "bands": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bands"
+        },
+        "nwp_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nwp Provider"
+        },
+        "use_diff_between_lags": {
+          "default": false,
+          "title": "Use Diff Between Lags",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "VariableConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "project": {
+      "$ref": "#/$defs/ProjectConfig"
+    },
+    "folders": {
+      "$ref": "#/$defs/FoldersConfig"
+    },
+    "jobs": {
+      "$ref": "#/$defs/JobsConfig"
+    },
+    "data": {
+      "$ref": "#/$defs/DataConfig"
+    },
+    "methods": {
+      "$ref": "#/$defs/MethodsConfig"
+    },
+    "experiments": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/NetworkExperimentConfig"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Experiments"
+    },
+    "experiments_module": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Experiments Module"
+    }
+  },
+  "required": [
+    "project",
+    "folders",
+    "data",
+    "methods"
+  ],
+  "title": "eforecast case",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/joesider9/ProjectPipelineTest/schema/experiment_config.schema.json",
+  "description": "A complete eforecast case (main.yaml or <case>.yaml)."
+}

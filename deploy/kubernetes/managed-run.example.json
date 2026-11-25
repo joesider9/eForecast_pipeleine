@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "image": "registry.example.edu/eforecast-worker@sha256:REPLACE_WITH_64_HEX_MANIFEST_DIGEST",
+  "server": "https://kubernetes.example.edu:6443",
+  "namespace": "eforecast",
+  "shared_root": "/srv/eforecast",
+  "workspace": "/srv/eforecast/workspace",
+  "state_root": "/srv/eforecast/execution-state",
+  "source_root": "/opt/eforecast",
+  "python": "/opt/conda/bin/python",
+  "service_account": "eforecast-worker",
+  "connection_secret": "managed-connections",
+  "resources": {"cpu_threads": 2, "ram_mb": 4096, "gpu_slots": 0},
+  "node_selector": {"kubernetes.io/hostname": "REPLACE_WITH_QUALIFIED_NODE"},
+  "pending_deadline": 180,
+  "active_deadline": 1800,
+  "max_jobs": 2,
+  "volume": {"hostPath": {"path": "/srv/eforecast", "type": "Directory"}}
+}

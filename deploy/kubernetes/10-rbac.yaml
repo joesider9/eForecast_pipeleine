@@ -1,0 +1,54 @@
+# The least the executor needs, and nothing a worker needs at all.
+#
+# The executor creates, reads and deletes Jobs and reads/patches their Pods -- in one namespace. It is
+# deliberately NOT allowed to create Pods directly, read Secrets, or touch nodes: a worker
+# executor that could read Secrets would be a credential store with a REST API.
+#
+# Note what is absent: no Docker socket anywhere, no cluster-wide role, no database
+# administration. Workers get `automountServiceAccountToken: false` in the Job template, so the
+# worker container has no cluster credential of its own.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eforecast-executor
+  namespace: eforecast
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eforecast-worker          # the identity Pods run as; it has no permissions by design
+  namespace: eforecast
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eforecast-executor
+  namespace: eforecast
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "patch"] # conditional removal of our evidence finalizer
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]               # the bootstrap's one-line refusal becomes the A14 wait message
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]              # FailedMount / FailedAttachVolume, for a useful storage wait
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eforecast-executor
+  namespace: eforecast
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: eforecast-executor
+subjects:
+  - kind: ServiceAccount
+    name: eforecast-executor
+    namespace: eforecast

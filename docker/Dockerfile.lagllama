@@ -1,0 +1,55 @@
+# Lag-Llama model image of the eforecast pipeline -- A16-02.
+#
+#   docker build -f docker/Dockerfile.lagllama -t eforecast-lagllama:a16-02 .
+#
+# One family, its own image, for a measured reason: Lag-Llama caps gluonts[torch] at 0.14.4,
+# which holds pandas at 2.1.x and numpy at 1.26.x.  Installing it into pipe_env would undo
+# the A13-05 pandas 3 upgrade and bring back the pickle incompatibility A13-01 closed; and
+# asking pip for Lag-Llama and foundationforecast together is ResolutionImpossible.
+#
+# It is also not on PyPI, so the package comes from a pinned commit and the weights from the
+# ungated Hugging Face repo time-series-foundation-models/Lag-Llama at run time.
+# The base is pinned by digest, not by tag.  A16-11: a tag can move under us, and a
+# rebuild on a silently different base is the kind of incoherence that shows up as a
+# wrong number rather than an error.  Pinning makes the base part of this file's own
+# content, so the recipe digest covers it.  Update it deliberately.
+FROM python:3.11-slim@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    EFORECAST_HOME=/opt/eforecast \
+    HF_HOME=/opt/cache/huggingface \
+    TORCH_HOME=/opt/cache/torch \
+    WANDB_DISABLED=true \
+    WANDB_MODE=disabled
+
+# git only to fetch the pinned commit below; libgomp for the tree utilities gluonts imports
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/requirements-lagllama.txt /tmp/requirements-lagllama.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-lagllama.txt \
+    && rm /tmp/requirements-lagllama.txt
+
+# the package at an immutable commit, without its own requirements: see the lock file for why
+ARG LAG_LLAMA_COMMIT=df7531a83a19b3c6a0222d703ca9bf59ef7a6ab9
+RUN pip install --no-cache-dir --no-deps \
+        "git+https://github.com/time-series-foundation-models/lag-llama@${LAG_LLAMA_COMMIT}" \
+    && pip uninstall -y wandb 2>/dev/null || true
+ENV LAG_LLAMA_COMMIT=${LAG_LLAMA_COMMIT}
+
+RUN mkdir -p /opt/cache/huggingface /opt/cache/torch /opt/task
+
+# only the stdlib-only contract, the witness chain and the numpy-only adapters
+WORKDIR ${EFORECAST_HOME}
+COPY eforecast/__init__.py ${EFORECAST_HOME}/eforecast/__init__.py
+COPY eforecast/runtime_contract.py ${EFORECAST_HOME}/eforecast/runtime_contract.py
+COPY eforecast/image_runtime.py ${EFORECAST_HOME}/eforecast/image_runtime.py
+COPY eforecast/profile_runtime.py ${EFORECAST_HOME}/eforecast/profile_runtime.py
+COPY eforecast/profile_policy.py ${EFORECAST_HOME}/eforecast/profile_policy.py
+COPY eforecast/runtime_adapters ${EFORECAST_HOME}/eforecast/runtime_adapters
+
+ENTRYPOINT ["python"]
+CMD ["-m", "eforecast.runtime_adapters", "--help"]

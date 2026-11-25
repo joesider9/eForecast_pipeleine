@@ -1,0 +1,17 @@
+{
+  "src/api/client.ts": 9,
+  "src/fields/DataTypesField.tsx": 3,
+  "src/fields/LagsField.tsx": 1,
+  "src/fields/MapField.tsx": 4,
+  "src/fields/MethodParamsField.tsx": 4,
+  "src/fields/PathField.tsx": 1,
+  "src/fields/TargetField.tsx": 2,
+  "src/fields/VariablesField.tsx": 4,
+  "src/fields/methodParameters.ts": 4,
+  "src/graph/ExperimentsEditor.tsx": 4,
+  "src/graph/LayerInspector.tsx": 3,
+  "src/graph/nodes.tsx": 1,
+  "src/graph/types.ts": 7,
+  "src/lib/schema.ts": 4,
+  "src/runs/StudiesPanel.tsx": 1
+}

@@ -1,0 +1,33 @@
+# Worker build, with the repository root as context.
+# This file takes precedence over the inference-oriented root .dockerignore.
+**
+!eforecast/
+!eforecast/**
+!eforecast_online/
+!eforecast_online/**
+!configuration/
+!configuration/**
+!docker/
+docker/**
+!docker/requirements-worker.txt
+!run_datasets.py
+!run_training.py
+!run_combine.py
+!run_model_script.py
+!run_site_graph.py
+!run_inference.py
+
+# Cases, credentials and generated artifacts are supplied at runtime.
+configuration/cases
+configuration/config*.py
+eforecast/nwp_extraction/openweather_key.json
+**/__pycache__
+**/lightning_logs
+**/.env
+**/.env.*
+**/*.pickle
+**/*.pkl
+**/*.pt
+**/*.pth
+**/*.ckpt
+**/*.log

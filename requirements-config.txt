@@ -1,0 +1,10 @@
+# the configuration package alone (schema, service, API, editors' logic): what the tests in tests/ need
+pydantic>=2.6
+PyYAML>=6
+fastapi>=0.110
+httpx>=0.27
+itsdangerous>=2.1
+numpy>=1.26
+pandas>=3,<4
+jsonschema>=4.20
+pytest>=8

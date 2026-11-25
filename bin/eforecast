@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# The `eforecast` command. This installation is not pip-installed, so there is no console
+# script; this wrapper is the equivalent, and `python -m eforecast.config.doctor` is the same
+# thing spelled out.
+#
+#   bin/eforecast doctor [--case NAME] [--verbose] [--json]
+#   bin/eforecast secret set <name>
+#   bin/eforecast images refresh [release]
+#   bin/eforecast metrics [--print|--port N]
+#   bin/eforecast status [--watch SECONDS] [--case NAME] [--all]
+#   bin/eforecast trials [--watch SECONDS] [--prometheus]
+#   bin/eforecast studies [--case NAME] [--all] [--watch SECONDS] [--prometheus]
+#   bin/eforecast processes [--watch SECONDS] [--prometheus]
+#
+# It runs the *configured* interpreter, not whichever python happens to be on PATH, because
+# that is the interpreter the runs themselves use and therefore the one worth checking.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# The installation's own configuration, for every verb that reports on it.
+#
+# Without this the doctor answered about whatever happened to be in the caller's shell, and on
+# the lab's own machine it reported "no backup destination is configured" while the service's
+# environment file had one -- a false alarm from the one command whose whole value is that it
+# does not raise them. Only variables that are *unset* are filled, so an explicit value in the
+# caller's environment still wins, and EFORECAST_ENV_FILE points this at another installation
+# or at /dev/null for a test that must not inherit anything.
+service_environment() {
+  local file="${EFORECAST_ENV_FILE:-/etc/eforecast/webui.env}" filled="" name value
+  [ -r "$file" ] || return 0
+  for name in EFORECAST_PYTHON EFORECAST_WORKSPACE EFORECAST_RELEASE EFORECAST_BACKUP_DIR \
+              EFORECAST_BROWSE_ROOTS EFORECAST_FLEET_METRICS_PORT EFORECAST_AUTH; do
+    [ -n "$(eval "printf '%s' \"\${$name:-}\"")" ] && continue
+    value=$(sed -n "s/^$name=\"\(.*\)\"\$/\1/p; s/^$name=\([^\"].*\)\$/\1/p" "$file" | tail -1)
+    [ -n "$value" ] || continue
+    export "$name=$value"
+    filled="$filled $name"
+  done
+  # Said out loud, because a verdict about an installation should name where it read it from.
+  [ -n "$filled" ] && [ "${1:-}" != quiet ] && echo "eforecast: read$filled from $file" >&2
+  return 0
+}
+
+case "${1:-doctor}" in
+  -h|--help|help) service_environment quiet ;;
+  *)              service_environment ;;
+esac
+
+python_bin="${EFORECAST_PYTHON:-$(command -v python3 || command -v python)}"
+
+if [ ! -x "$python_bin" ]; then
+  echo "eforecast: no interpreter found. Set EFORECAST_PYTHON to the one the lab uses." >&2
+  exit 3
+fi
+
+command="${1:-doctor}"
+[ $# -gt 0 ] && shift || true
+
+case "$command" in
+  doctor)
+    PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.config.doctor "$@"
+    ;;
+  secret)
+    PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.config.secrets_source "$@"
+    ;;
+  metrics)
+    PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.config.metrics_server "$@"
+    ;;
+  status)
+    PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.config.status "$@"
+    ;;
+  trials)
+    PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.config.trial_progress "$@"
+    ;;
+  studies)
+    PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.config.study_progress "$@"
+    ;;
+  processes)
+    PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.config.process_watch "$@"
+    ;;
+  images)
+    # One verb for the whole image set, because the steps only make sense together: an edit to
+    # a file an image carries makes it stale, and A16-11 then refuses to route to it.
+    action="${1:-check}"
+    [ $# -gt 0 ] && shift || true
+    # The witness must land in the file the *service* reads. A caller who has not set a
+    # workspace almost certainly means the service's own, so take it from the service's
+    # environment file and say so, rather than recording where nothing will look (A13-02).
+    case "$action" in
+      refresh)
+        exec env EFORECAST_PYTHON="$python_bin" bash "$here/docker/refresh_images.sh" "$@"
+        ;;
+      check)
+        release="${EFORECAST_RELEASE:-a16-02}"
+        case "${1:-}" in -*|'') ;; *) release="$1"; shift ;; esac
+        PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.image_release \
+          check --release "$release" "$@"
+        ;;
+      *)
+        echo "eforecast images: unknown action '$action'. Try: refresh, check" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  backup)
+    PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.config.model_backup "$@"
+    ;;
+  route)
+    PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.config.dispatch_route "$@"
+    ;;
+  forecast-status)
+    PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.config.forecast_publication "$@"
+    ;;
+  approve|rollback|approved)
+    # One entry point, three verbs: `approved <case>` reads, the other two change the pointer.
+    case "$command" in approved) set -- active "$@" ;; *) set -- "$command" "$@" ;; esac
+    PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python_bin" -m eforecast.config.model_approval "$@"
+    ;;
+  -h|--help|help)
+    cat <<'USAGE'
+usage: eforecast <command> [options]
+
+  doctor    check this installation and say what to do about anything wrong
+            --case NAME    also check one case and its retained models
+            --artifacts P  sample the retained artifacts under P
+            --verbose      also list the checks that passed
+            --json         machine-readable output
+            exit 0 ready, 1 needs attention, 2 must be fixed, 3 the doctor could not run
+
+  secret    the one place a credential is kept
+            set NAME       store or replace one, read from a prompt and never echoed
+            list           what is stored, with no values
+            where NAME     the file it is read from
+
+  backup    copy, check and restore an approved bundle and its dependencies
+            backup copy BUNDLE DESTINATION [--case NAME] [--label NAME]
+            backup verify GENERATION          backup restore GENERATION INTO
+            backup list DESTINATION CASE
+            The destination must be a different physical device. A restored bundle is
+            qualified by replay before use: bin/eforecast approve <case> <restored>
+
+  route     where a scope's work is dispatched, and the record of every change
+            route                      what this installation does today
+            route CASE                 what one case does, and what is outstanding
+            route CASE local|broker --note "why"   decide it
+            route CASE --history       every decision, newest first
+            Refused while work is outstanding: two venues must not claim one attempt.
+            exit 3 refused because work is outstanding, 2 refused for any other reason
+
+  forecast-status
+            what forecast is published for a case, and whether the last attempt worked
+            forecast-status CASE
+            Two separate answers: a failed attempt never replaces a good forecast.
+            forecast-status CASE --repair-export FOLDER   write FOLDER/latest.csv again
+                                       from the published forecast; computes nothing
+            exit 0 current, 1 stale or the last attempt failed, 2 none published.
+            Guide: docs/troubleshooting.md, "The forecast looks old, or wrong"
+
+  approved  which bundle a case uses for routine forecasts, and what preceded it
+            approved CASE
+
+  approve   make a validated bundle the active version for a case
+            approve CASE BUNDLE_DIR [--note ...] [--expect-revision N]
+            Refuses a bundle that does not validate here. Approval is a maintainer
+            action and is separate from training: finishing a trial changes nothing.
+
+  rollback  return a case to a previously validated version
+            rollback CASE [--to REVISION] [--note ...]
+            A pointer operation with a re-validation, never a retrain.
+
+  images    the image set a release describes: rebuild it, witness it, check it
+            images check [release]     what differs from the release, and why
+            images refresh [release]   rebuild all four, re-witness, re-capture, check
+            Any edit to a file an image carries makes it stale, and routing is refused
+            until this has run -- a stale image returns a wrong number, not an error.
+            The release's own tag is used for the worker and online images; the floating
+            tags production may reference are never moved, and the build each one
+            replaces stays reachable as <repo>:<release>-previous.
+            exit 1 something is stale or missing, 3 the release is not recorded
+
+  metrics   serve this installation's durable state for Prometheus
+            --print        render one exposition to stdout and exit
+            --port N       listen on N (default 9109, 0 serves nothing)
+            A source that cannot be read reports itself unreadable and emits no values,
+            so a blank panel is never mistaken for a quiet system.
+
+  status    the whole picture of the training in a terminal: the machine and its cards in
+            a line, the trials training now, every case's studies with what is done and
+            what is left, the trials that finished last, and the pipeline's processes
+            --watch SECONDS  print again every SECONDS until Ctrl-C
+            --case NAME      one case only        --all   also the studies that are done
+            The same as the Grafana dashboard "eforecast training".
+
+  trials    the trials training on this machine now: case, cluster, method, card, epoch
+            (of how many), the loop it is in now (train or eval, batches done, it/s, time
+            left), the error of that epoch and the best so far (validation and test), loops
+            and epochs per second, how long each has run and how long ago it finished an epoch
+            --watch SECONDS  print again every SECONDS until Ctrl-C
+            --prometheus     print what the metrics service serves at /trials
+
+  studies   what every study of every case has done and has left: trials complete, pruned,
+            failed, running, left of how many wanted, the best value, how long a trial
+            takes, and the trials that finished last
+            --case NAME   one case only     --all   also the studies that are done
+            --watch SECONDS    --prometheus (what the metrics service serves at /studies)
+
+  processes every process of the pipeline with its processors, memory, memory on a card
+            and threads -- a training, its trials and data loaders, a combination, the
+            pages, the services -- and the heaviest other processes of the machine
+            --watch SECONDS    --prometheus (what the metrics service serves at /processes)
+
+Every command above reads this installation's own settings -- workspace, release, backup
+destination, interpreter -- from /etc/eforecast/webui.env for anything your shell has not
+set, and says on stderr which ones it took. An explicit variable always wins.
+EFORECAST_ENV_FILE points that somewhere else, or at /dev/null to inherit nothing.
+
+The same check runs in the web UI's Review tab, so the two agree for one case.
+If a run has already failed, read docs/troubleshooting.md. Every verb is explained, with
+what it changes and what its output means, in docs/cli.md section 2.
+USAGE
+    ;;
+  *)
+    echo "eforecast: unknown command '$command'. Try: eforecast --help" >&2
+    exit 2
+    ;;
+esac

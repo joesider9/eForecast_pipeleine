@@ -1,0 +1,189 @@
+# Study storage and monitoring for the GPU training.
+#
+#   cd docker && docker compose up -d
+#   cd docker && docker compose up -d --no-deps prometheus   # after changing one service: recreates that one only
+#
+#   PostgreSQL       localhost:5432   Optuna storage: export EFORECAST_OPTUNA_STORAGE=postgresql://optuna:optuna@localhost:5432/optuna
+#   optuna-dashboard http://localhost:8080   trials, curves, importances (reads PostgreSQL)
+#   optuna-mirror    no host port            copies the studies of the cases -- files beside the models --
+#                                            into that database, so the dashboard shows the lab's own work
+#   Grafana          http://localhost:3000   user admin, password GRAFANA_PASSWORD of .env -- read at Grafana's
+#                                            first start only (docs/installation.md §2.7)
+#   Prometheus       http://localhost:9090   scrapes the DCGM exporter (GPUs), cAdvisor (every container), the
+#                                            orchestrator (:9108, while a training runs) and the installation's
+#                                            numbers (:9109); alert rules from monitoring/prometheus/rules
+#   cAdvisor         no host port            CPU, memory, disk, network and restarts of each container
+#   RabbitMQ         localhost:5672    dispatch broker; management UI on http://localhost:15672
+#                                      Prometheus scrapes its own plugin on :15692 once the target of job
+#                                      `rabbitmq` in monitoring/prometheus/prometheus.yml is filled in.
+#                                      Nothing dispatches to it until a route is decided:
+#                                      `bin/eforecast route <case> broker --note "why"`.
+#
+# Change the passwords in docker/.env before exposing anything beyond this machine. The broker
+# URL the application uses belongs in the secret source, not in a shell profile:
+#   bin/eforecast secret set broker_url
+name: eforecast
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${OPTUNA_DB_USER:-optuna}
+      POSTGRES_PASSWORD: ${OPTUNA_DB_PASSWORD:-optuna}
+      POSTGRES_DB: ${OPTUNA_DB_NAME:-optuna}
+    ports:
+      - "${OPTUNA_DB_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${OPTUNA_DB_USER:-optuna} -d ${OPTUNA_DB_NAME:-optuna}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  optuna-dashboard:
+    image: ghcr.io/optuna/optuna-dashboard:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["postgresql+psycopg2://${OPTUNA_DB_USER:-optuna}:${OPTUNA_DB_PASSWORD:-optuna}@postgres:5432/${OPTUNA_DB_NAME:-optuna}"]
+    ports:
+      - "${OPTUNA_DASHBOARD_PORT:-8080}:8080"
+
+  optuna-mirror:
+    # The trainings keep each study in a file beside its models; the dashboard above reads the
+    # database. This copies the one into the other, about once a minute: the studies of every
+    # case of the workspace, one study in the dashboard for a case and a cluster with the trials
+    # of every method in it (each says its method, its folder and its study), a running one
+    # brought up to date as it goes (monitoring/optuna_mirror/mirror.py). It asks the metrics
+    # service on the host (port 9109, the same one Prometheus reads) and opens no model folder;
+    # it needs Optuna and the database driver only, so it runs in the dashboard's own image. It
+    # writes into the studies it made and into nothing else in the database.
+    image: ghcr.io/optuna/optuna-dashboard:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["python", "/mirror/mirror.py"]
+    environment:
+      # in the environment, not on the command line: a command line is shown to every user of the machine
+      OPTUNA_MIRROR_STORAGE: postgresql+psycopg2://${OPTUNA_DB_USER:-optuna}:${OPTUNA_DB_PASSWORD:-optuna}@postgres:5432/${OPTUNA_DB_NAME:-optuna}
+      EFORECAST_STUDIES_URL: http://host.docker.internal:${EFORECAST_FLEET_METRICS_PORT:-9109}
+      OPTUNA_MIRROR_EVERY: "60"
+    volumes:
+      - ./monitoring/optuna_mirror:/mirror:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # the metrics service runs on the host
+
+  dcgm-exporter:
+    # GPU utilisation, memory, temperature, power per card (needs the NVIDIA Container Toolkit)
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:4.2.3-4.1.3-ubuntu22.04
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ports:
+      - "${DCGM_PORT:-9400}:9400"
+
+  cadvisor:
+    # Every container's CPU, memory, disk and network, when it started and whether the kernel
+    # ended something in it for lack of memory: Prometheus job `cadvisor`, Grafana dashboard
+    # "eforecast containers". No port on the host -- Prometheus reads it inside this network, and
+    # 8080 is the Optuna dashboard's. Not privileged: the host read-only and Docker's socket are all
+    # it needs here (tried on 20 November 2026, every container seen).
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    restart: unless-stopped
+    command:
+      - --docker_only=true                        # containers, not every cgroup of the host
+      - --housekeeping_interval=15s               # as often as Prometheus reads it
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.service
+      # 803 series instead of 2,643: the per-device disk usage and the kernel details nobody reads
+      - --disable_metrics=advtcp,cpu_topology,cpuset,disk,hugetlb,memory_numa,percpu,perf_event,process,referenced_memory,resctrl,sched,tcp,udp
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+
+  rabbitmq:
+    # A16-04's dispatch broker. `guest` is deliberately not used: RabbitMQ refuses it from
+    # anything but a loopback connection *inside* the container, so a host process reaching it
+    # through the published port would be rejected with a message about permissions rather than
+    # about the user.
+    image: rabbitmq:4.1-management-alpine
+    restart: unless-stopped
+    hostname: eforecast-broker          # RabbitMQ names its data directory after the host
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-eforecast}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-eforecast}
+    # The Prometheus plugin is enabled offline, before the node starts, so the scrape target
+    # exists from the first second rather than after a restart nobody remembers to do.
+    command: >
+      sh -c "rabbitmq-plugins enable --offline rabbitmq_prometheus && exec rabbitmq-server"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    # Bound to the loopback address, unlike the rest of this stack: the dispatcher and the
+    # workers run on this host today, and a broker reachable from the LAN with a password from
+    # a compose default is a worse thing to leave running than a dashboard. A cutover to
+    # workers elsewhere is an explicit change to these three lines.
+    ports:
+      - "127.0.0.1:${RABBITMQ_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_UI_PORT:-15672}:15672"
+      - "127.0.0.1:${RABBITMQ_METRICS_PORT:-15692}:15692"
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 40s
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=90d
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # The alert rules prometheus.yml names. Missing until 20 November 2026: none was loaded.
+      - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # the orchestrator runs on the host
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      OPTUNA_DB_USER: ${OPTUNA_DB_USER:-optuna}
+      OPTUNA_DB_PASSWORD: ${OPTUNA_DB_PASSWORD:-optuna}
+      OPTUNA_DB_NAME: ${OPTUNA_DB_NAME:-optuna}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+
+volumes:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
+  rabbitmq-data:

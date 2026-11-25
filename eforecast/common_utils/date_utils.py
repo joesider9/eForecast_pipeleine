@@ -1,0 +1,159 @@
+# eForecast project author: George Sideratos
+# License for eForecast contributions: MIT
+# Header date: 2026-11-25
+
+import pandas as pd
+
+from pytz import timezone
+from workalendar.europe import Portugal
+from workalendar.europe import Greece
+
+from eforecast.common_utils.resolutions import canonical
+
+
+def date_parser_fun(x):
+    return pd.to_datetime(x, format='%Y%m%d %H:%M')
+
+
+def convert_timezone(data, timezone1='Europe/Athens', timezone2='UTC'):
+    def datetime_exists_in_tz(dt, tz):
+        try:
+            dt.tz_localize(tz)
+            return True
+        except:
+            return False
+
+    dates = data.index
+    indices = [i for i, t in enumerate(dates) if datetime_exists_in_tz(t, tz=timezone(timezone1))]
+    data = data.iloc[indices]
+    dates = dates[indices]
+    dates = dates.tz_localize(timezone(timezone1))
+    dates = dates.tz_convert(timezone(timezone2))
+    dates = [pd.to_datetime(dt.strftime('%d%m%y%H%M'), format='%d%m%y%H%M') for dt in dates]
+    data.index = dates
+    return data
+
+
+def convert_timezone_dates(dates, timezone1='Europe/Athens', timezone2='UTC', return_indices=False):
+    dates_localized = dates.tz_localize(
+        timezone(timezone1),
+        nonexistent='shift_forward',   # replace nonexistent DST times
+        ambiguous='infer'              # handle fall DST duplicates
+    )
+    dates_utc = dates_localized.tz_convert(timezone(timezone2))
+    dates_out = [pd.to_datetime(dt.strftime('%d%m%y%H%M'), format='%d%m%y%H%M') for dt in dates_utc]
+
+    if return_indices:
+        return dates_out, list(range(len(dates_out)))
+    return dates_out
+
+
+class Azores(Portugal):
+    FIXED_HOLIDAYS = Portugal.FIXED_HOLIDAYS + (
+        (4, 11, "Dia da Liberdade"),
+        (7, 18, "Dia de Portugal"),
+        (6, 29, " Dia de S. Pedro"),
+    )
+
+    def __init__(self):
+        super(Portugal, self).__init__()
+        self.include_epiphany = True
+        self.include_all_saints = True
+        self.include_boxing_day = True
+        self.include_christmas_eve = True
+        self.include_clean_monday = True
+        self.include_easter_saturday = True
+        self.include_easter_monday = True
+        self.include_corpus_christi = True
+        self.include_immaculate_conception = True
+        self.variable_days = {'Clean Monday', 'Good Friday', 'Easter Saturday', 'Easter Sunday', 'Easter Monday'
+            , 'Corpus Christi', 'Santo Cristo', 'Pombinha', 'Dia do Corpo de Deus'}
+
+    def get_fixed_holidays(self, year):
+        days = super().get_fixed_holidays(year)
+        return days
+
+    def get_variable_days(self, year):
+        days = super().get_variable_days(year)
+        if year > 2015 or year < 2013:
+            days.append((self.get_easter_sunday(year) + pd.DateOffset(days=36), "Santo Cristo"))
+            days.append((self.get_easter_sunday(year) + pd.DateOffset(days=50), "Pombinha"))
+            days.append((self.get_easter_sunday(year) + pd.DateOffset(days=64), "Dia do Corpo de Deus"))
+        return days
+
+    def get_extras(self, year):
+        days = []
+        days.append(self.get_easter_sunday(year) + pd.DateOffset(days=36))
+        days.append(self.get_easter_sunday(year) + pd.DateOffset(days=50))
+        days.append(self.get_easter_sunday(year) + pd.DateOffset(days=64))
+        return days
+
+
+def sp_index(r, country='Greece'):
+    if country == 'Greece':
+        cal = Greece()
+        cal.include_christmas_eve = True
+        cal.include_easter_saturday = True
+    elif country == 'Azores':
+        cal = Azores()
+        extra = cal.get_extras(r.year)
+    else:
+        raise NotImplementedError(f'Special index function not implemented for {country}')
+    if cal.is_holiday(r):
+        sp = 100
+    else:
+        if r.dayofweek == 6:
+            sp = 50
+        else:
+            sp = 0
+    return sp
+
+
+def last_year_lags(r, country, freq='H'):
+    # Callers pass this straight from the configuration, and the branches below read it as a
+    # configuration spelling. Resolve it so a pandas alias ('h') cannot pick the daily branch.
+    freq = canonical(freq)
+    if country == 'Greece':
+        cal = Greece()
+        cal.include_christmas_eve = True
+        cal.include_easter_saturday = True
+    else:
+        raise NotImplementedError(f'Last year holidays index function not implemented for {country}')
+    holidays = cal.get_calendar_holidays(r.year)
+    holidays = pd.DataFrame(holidays, columns=['date', 'name'])
+    holidays = holidays.set_index('date')
+    holidays.index = pd.to_datetime(holidays.index)
+    variable_days = ['Clean Monday', 'Good Friday', 'Easter Saturday', 'Easter Sunday', 'Easter Monday',
+                     'Whit Monday', 'Pentecost']
+    r1 = pd.to_datetime(r.strftime('%Y-%m-%d'))
+    if cal.is_holiday(r):
+        if r1 not in holidays.index:
+            raise ValueError(f'date {r1} not in holidays index')
+        name = holidays.loc[r1]
+        if r1 in holidays.index and name.values[0] in variable_days:
+            # A moveable feast is not on last year's calendar date, so shift by the gap between
+            # the two Easters -- and then take the same three features as every other date here:
+            # the matching moment, a day before it, a week before it.
+            #
+            # Both lists used to be stacked into a numpy array, and pandas accepts a numpy
+            # integer for a calendar unit but refuses one for an hour, so every hour of the
+            # seven moveable feasts a year raised TypeError and the caller dropped it without
+            # a word. The hourly list also held eight offsets where every other branch returns
+            # three, and the caller names its columns by counting them.
+            easter0 = cal.get_easter_sunday(r.year)
+            easter1 = cal.get_easter_sunday(r.year - 1)
+            if freq == 'H':
+                lag = int((easter0 - easter1) / pd.Timedelta(1, 'h')) - 1
+                return [r - pd.DateOffset(hours=lag + i) for i in (0, 24, 168)]
+            lag = int((easter0 - easter1) / pd.Timedelta(1, 'D')) - 1
+            return [r - pd.DateOffset(days=lag + i) for i in (0, 1, 7)]
+        else:
+            if freq == 'D':
+                return [r - pd.DateOffset(years=1) - pd.DateOffset(days=i) for i in [0, 1, 7]]
+            else:
+                return [r - pd.DateOffset(years=1) - pd.DateOffset(hours=i) for i in [0, 24, 168]]
+    else:
+        if freq == 'D':
+            return [r - pd.DateOffset(years=1) - pd.DateOffset(days=i) for i in [0, 1, 7]]
+        else:
+            return [r - pd.DateOffset(years=1) - pd.DateOffset(hours=i) for i in [0, 24, 168]]

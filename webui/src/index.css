@@ -1,0 +1,6 @@
+html, body, #root { height: 100%; margin: 0; }
+body { font-family: Inter, Roboto, system-ui, sans-serif; background: #f6f7f9; }
+.cm-editor { border: 1px solid rgba(0,0,0,.23); border-radius: 4px; font-size: 13px; }
+.cm-editor.cm-focused { outline: 2px solid #1976d2; outline-offset: -1px; }
+.diff-line { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; white-space: pre; padding: 0 8px; }
+.diff-add { background: #e6ffed; } .diff-del { background: #ffeef0; } .diff-ctx { color: #555; }

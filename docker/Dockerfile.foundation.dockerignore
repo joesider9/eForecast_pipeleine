@@ -1,0 +1,30 @@
+# Foundation image, built with the repository root as context.
+# This file takes precedence over the inference-oriented root .dockerignore.
+# The image needs the lock and six source files; everything else would only make the build
+# context (a Dropbox tree with the lab's data in it) enormous.
+**
+!docker/requirements-foundation.txt
+!eforecast/__init__.py
+!eforecast/runtime_contract.py
+!eforecast/image_runtime.py
+!eforecast/profile_runtime.py
+!eforecast/profile_policy.py
+!eforecast/runtime_adapters
+!eforecast/runtime_adapters/**
+
+# Named although the rules above already exclude them. The allow-list is what keeps the private
+# cases, the credentials and the trained output out of this context, and an allow-list is one
+# careless '!eforecast/**' away from carrying all three. These lines come last, so they win.
+configuration/cases
+configuration/config*.py
+eforecast/nwp_extraction/openweather_key.json
+**/__pycache__
+**/lightning_logs
+**/.env
+**/.env.*
+**/*.pickle
+**/*.pkl
+**/*.pt
+**/*.pth
+**/*.ckpt
+**/*.log

@@ -1,0 +1,146 @@
+{
+  "nwp": [
+    {
+      "type": "cnn_att",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "fixed",
+          "value": "cbam"
+        }
+      },
+      "enabled": true
+    },
+    {
+      "type": "cnn_att",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "fixed",
+          "value": "att"
+        }
+      },
+      "enabled": true
+    },
+    {
+      "type": "cnn_att",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "fixed",
+          "value": "geodatt"
+        }
+      },
+      "enabled": true
+    },
+    {
+      "type": "conv",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "fixed",
+          "value": 2
+        }
+      },
+      "enabled": true
+    },
+    {
+      "type": "cnn_att",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "fixed",
+          "value": "cbam"
+        }
+      },
+      "enabled": true
+    },
+    {
+      "type": "cnn_att",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "fixed",
+          "value": "geodatt"
+        }
+      },
+      "enabled": true
+    },
+    {
+      "type": "Flatten",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "fixed",
+          "value": []
+        }
+      },
+      "enabled": true
+    },
+    {
+      "type": "dense",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "fixed",
+          "value": 512
+        }
+      },
+      "enabled": true
+    },
+    {
+      "type": "dense",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "fixed",
+          "value": 128
+        }
+      },
+      "enabled": true
+    }
+  ],
+  "row_calendar": [
+    {
+      "type": "dense",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "choice",
+          "value": [
+            64
+          ]
+        }
+      },
+      "enabled": true
+    }
+  ],
+  "output": [
+    {
+      "type": "cross_attention",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "choice",
+          "value": [
+            1
+          ]
+        }
+      },
+      "enabled": true
+    },
+    {
+      "type": "dense",
+      "name": null,
+      "params": {
+        "size": {
+          "tag": "choice",
+          "value": [
+            64
+          ]
+        }
+      },
+      "enabled": true
+    }
+  ]
+}

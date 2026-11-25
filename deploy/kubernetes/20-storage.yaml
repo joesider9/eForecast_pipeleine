@@ -1,0 +1,35 @@
+# Storage, with the access mode stated rather than assumed.
+#
+# The thing that goes wrong here is a node-local mount masquerading as shared storage: it works
+# perfectly on a one-node pilot and silently loses every artifact the day a second node joins.
+# So the inputs and results claims below declare ReadWriteMany and name a StorageClass that must
+# actually provide it. On a single-node pilot with `local-path`, ReadWriteMany is a lie that the
+# cluster will happily accept -- which is why `deploy/kubernetes/README.md` makes proving the
+# access mode an enrollment step, not an assumption.
+#
+# `storageClassName` is intentionally left as a placeholder. Filling it in is a lab decision
+# (NFS, Longhorn, Ceph, a specific CSI driver), and it is the owner's to make.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: eforecast-inputs
+  namespace: eforecast
+spec:
+  accessModes: ["ReadWriteMany"]      # several Pods read the same accepted inputs at once
+  storageClassName: REPLACE-WITH-A-SHARED-CLASS
+  resources:
+    requests:
+      storage: 200Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: eforecast-results
+  namespace: eforecast
+spec:
+  accessModes: ["ReadWriteMany"]      # publication must be visible to the coordinator, elsewhere
+  storageClassName: REPLACE-WITH-A-SHARED-CLASS
+  resources:
+    requests:
+      storage: 500Gi

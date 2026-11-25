@@ -1,0 +1,8 @@
+# One namespace for the worker pilot. The executor's credential is scoped to it, so a worker
+# cannot see or touch anything else in the cluster.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: eforecast
+  labels:
+    eforecast.io/component: pilot

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "account_id": null,
+  "region": null,
+  "profile": null,
+  "owner": null,
+  "deadline_utc": null,
+  "spending_limit_usd": null,
+  "namespace": "eforecast-pilot",
+  "lab_namespace": "eforecast",
+  "authority": "new-isolated",
+  "architecture": "amd64",
+  "cpu": {"instance_type": null, "nodes": 1},
+  "gpu": {"instance_type": null, "nodes": 1},
+  "images": {"worker": null},
+  "max_transfer_bytes": null,
+  "scratch_bytes": null,
+  "teardown_owner": null
+}

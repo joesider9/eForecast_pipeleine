@@ -1,0 +1,438 @@
+# eForecast project author: George Sideratos
+# License for eForecast contributions: MIT
+# Header date: 2026-11-25
+
+import os
+import joblib
+
+import numpy as np
+import pandas as pd
+
+from threadpoolctl import threadpool_limits
+
+from sklearn.linear_model import LassoCV, Lasso
+from sklearn.linear_model import MultiTaskLassoCV, MultiTaskLasso
+from sklearn.ensemble import RandomForestRegressor
+
+from eforecast.datasets.data_feeder import DataFeeder
+from eforecast.common_utils.dataset_utils import rows_at, sync_rows
+from eforecast.common_utils.dataset_utils import sync_dict_df
+
+pd.set_option('display.expand_frame_repr', False)
+
+CategoricalFeatures = ['dayweek', 'hour', 'month', 'sp_index']
+
+
+class ShallowModel:
+    def __init__(self, static_data, path_weights, params=None, n_jobs=1, refit=False, train=False, online=False):
+        self.best_mae_val = None
+        self.best_mae_test = None
+        self.sse_val = None
+        self.sse_test = None
+        self.is_trained = False
+        self.refit = refit
+        self.static_data = static_data
+        self.rated = static_data['rated']
+        from eforecast.execution_policy import estimator_threads
+        self.n_jobs = estimator_threads(n_jobs)
+        if params is not None:
+            self.params = params
+            self.method = self.params['method']
+            self.cluster_name = self.params['cluster_name']
+            self.merge = self.params['merge']
+            self.compress = self.params['compress']
+            self.scale_nwp_method = self.params['scale_nwp_method']
+            self.scale_row_method = self.params['scale_row_method']
+            if self.method == 'RF':
+                self.model = RandomForestRegressor(n_jobs=self.n_jobs)
+                self.best_params = self.model.get_params()
+            elif self.method == 'lightgbm':
+                import lightgbm as lgb
+                if self.static_data['horizon_type'] == 'short_term':
+                    self.model = dict()
+                    for col in self.static_data['target_variable']['lags']:
+                        self.model[f'lgbm_{col}'] = lgb.LGBMRegressor(n_jobs=self.n_jobs, verbose=0)
+                    self.best_params = lgb.LGBMRegressor(n_jobs=self.n_jobs).get_params()
+                else:
+                    self.model = lgb.LGBMRegressor(n_jobs=self.n_jobs, verbose=0)
+                    self.best_params = self.model.get_params()
+            elif self.method == 'CatBoost':
+                from catboost import CatBoostRegressor
+                self.model = CatBoostRegressor(thread_count=self.n_jobs, allow_writing_files=False)
+                self.best_params = {'iterations': 1000,
+                                    'learning_rate': 0.005,
+                                    'l2_leaf_reg': 1,
+                                    "objective": "RMSE",
+                                    'subsample': 0.9,
+                                    'min_data_in_leaf': 2,
+                                    "colsample_bylevel": 0.3,
+                                    "depth": 1,
+                                    "boosting_type": "Ordered",
+                                    "bootstrap_type": "Bayesian",
+                                    "eval_metric": "MAE"}
+            elif self.method == 'lasso':
+                if self.static_data['horizon_type'] == 'short_term':
+                    self.model = MultiTaskLassoCV(max_iter=150000, n_jobs=self.n_jobs)
+                else:
+                    self.model = LassoCV(max_iter=150000, n_jobs=self.n_jobs)
+                self.best_params = self.model.get_params()
+            elif 'RBF' in self.method:
+                from eforecast.shallow_models.rbf_ols_network import RBFols
+                self.model = RBFols(self.rated)
+                self.best_params = self.model.get_params()
+            else:
+                raise ValueError(f'Unknown method {self.method} for shallow models')
+            for param, value in self.params.items():
+                if param in self.best_params.keys():
+                    self.best_params[param] = value
+            self._consistent_catboost_params()
+            if isinstance(self.model, dict):
+                for key in self.model.keys():
+                    self.model[key].set_params(**self.best_params)
+            else:
+                self.model.set_params(**self.best_params)
+        self.path_weights = path_weights
+        try:
+            if not self.refit:
+                self.load()
+        except:
+            pass
+        self.refit = refit
+        self.is_online = online
+        self.train = train
+        self.data_feeder = DataFeeder(static_data, online=self.is_online, train=self.train)
+        self.n_jobs = estimator_threads(n_jobs)  # loaded metadata cannot override this invocation
+        self._execution_limits()
+        if not hasattr(self, 'params'):
+            raise RuntimeError('The network has no params. You should train the net providing params')
+
+    def reset(self, params):
+        self.params = params
+        self.method = self.params['method']
+        self.cluster_name = self.params['cluster_name']
+        self.merge = self.params['merge']
+        self.compress = self.params['compress']
+        self.scale_nwp_method = self.params['scale_nwp_method']
+        self.scale_row_method = self.params['scale_row_method']
+        if self.method == 'RF':
+            self.model = RandomForestRegressor(n_jobs=self.n_jobs)
+            self.best_params = self.model.get_params()
+        elif self.method == 'lightgbm':
+            import lightgbm as lgb
+            if self.static_data['horizon_type'] == 'short_term':
+                self.model = dict()
+                for col in self.static_data['target_variable']['lags']:
+                    self.model[f'lgbm_{col}'] = lgb.LGBMRegressor(n_jobs=self.n_jobs, verbose=0)
+                self.best_params = lgb.LGBMRegressor(n_jobs=self.n_jobs).get_params()
+            else:
+                self.model = lgb.LGBMRegressor(n_jobs=self.n_jobs, verbose=0)
+                self.best_params = self.model.get_params()
+        elif self.method == 'CatBoost':
+            from catboost import CatBoostRegressor
+            self.model = CatBoostRegressor(thread_count=self.n_jobs, allow_writing_files=False)
+            self.best_params = {'iterations': 1000,
+                                'learning_rate': 0.005,
+                                'l2_leaf_reg': 1,
+                                "objective": "RMSE",
+                                'min_data_in_leaf': 2,
+                                "colsample_bylevel": 0.3,
+                                "depth": 1,
+                                "boosting_type": "Ordered",
+                                "bootstrap_type": "Bayesian",
+                                "eval_metric": "MAE"}
+        elif self.method == 'lasso':
+            if self.static_data['horizon_type'] == 'short_term':
+                self.model = MultiTaskLassoCV(max_iter=150000, n_jobs=self.n_jobs)
+            else:
+                self.model = LassoCV(max_iter=150000, n_jobs=self.n_jobs)
+            self.best_params = self.model.get_params()
+        elif 'RBF' in self.method:
+            from eforecast.shallow_models.rbf_ols_network import RBFols
+            self.model = RBFols(self.rated)
+            self.best_params = self.model.get_params()
+        else:
+            raise ValueError(f'Unknown method {self.method} for shallow models')
+        for param, value in self.params.items():
+            if param in self.best_params.keys():
+                self.best_params[param] = value
+        self._consistent_catboost_params()
+        if isinstance(self.model, dict):
+            for key in self.model.keys():
+                self.model[key].set_params(**self.best_params)
+        else:
+            self.model.set_params(**self.best_params)
+        self._execution_limits()
+
+    def _execution_limits(self, *, fitting=False):
+        from eforecast.execution_policy import bound_estimator, current, estimator_threads
+        if current() is not None:
+            self.n_jobs = estimator_threads()
+            fitted_catboost=(self.method=='CatBoost' and self.model is not None and self.model.is_fitted())
+            if fitted_catboost and fitting:
+                # Training again needs a fresh estimator with bounded training
+                # parameters; preserve this model as init evidence, never mutate it.
+                from catboost import CatBoostRegressor
+                self.model=CatBoostRegressor(**self.model.get_params())
+                fitted_catboost=False
+            if not fitted_catboost:
+                bound_estimator(self.model, self.best_params)
+
+    #: The CatBoost objectives that accept a target with more than one column.
+    MULTI_OUTPUT_OBJECTIVES = ('MultiRMSE', 'MultiRMSEWithMissingValues', 'MultiLogloss',
+                               'MultiCrossEntropy', 'SurvivalAft')
+
+    def _target_width(self) -> int:
+        """How many columns the case's target has, from its own declaration."""
+        columns = (self.static_data.get('target_variable') or {}).get('columns')
+        return len(columns) if columns else 1
+
+    def _consistent_catboost_params(self):
+        """CatBoost rejects ``subsample`` with the Bayesian bootstrap and ``bagging_temperature`` without it.
+
+        It also refuses a target with more than one column under a single-output objective:
+        ``RMSE`` raises "Currently only multi-regression, multilabel and survival objectives
+        work with multidimensional target", and the jittered retry cannot help because the
+        cause is the objective, not the variance.  A short-term case predicts one column per
+        horizon step, so enabling CatBoost there failed the whole study before it produced a
+        model.  ``MAE`` is not a legal eval metric beside ``MultiRMSE`` either, so both move
+        together.  The substitution is announced rather than silent, and an objective that
+        already handles several columns is left alone.
+        """
+        if self.method != 'CatBoost':
+            return
+        if self._target_width() > 1:
+            objective = str(self.best_params.get('objective') or 'RMSE')
+            if objective not in self.MULTI_OUTPUT_OBJECTIVES:
+                print(f'CatBoost objective {objective} cannot fit a target of '
+                      f'{self._target_width()} columns; using MultiRMSE')
+                self.best_params['objective'] = 'MultiRMSE'
+            if not str(self.best_params.get('eval_metric') or '').startswith('Multi'):
+                self.best_params['eval_metric'] = self.best_params['objective']
+        if self.best_params.get('bootstrap_type') == 'Bayesian':
+            self.best_params.pop('subsample', None)
+            if 'bagging_temperature' in self.params:
+                self.best_params['bagging_temperature'] = self.params['bagging_temperature']
+        else:
+            self.best_params.pop('bagging_temperature', None)
+            if 'subsample' in self.params:
+                self.best_params['subsample'] = self.params['subsample']
+
+    def load_data(self, with_target=False):
+        what_data = self.params['what_data']
+        x, mdata = self.data_feeder.feed_inputs(what_data, merge=self.params['merge'], compress=self.params['compress'],
+                                                image_data_type = self.params.get('image_data_type'),
+                                                scale_img_method = self.params.get('scale_img_method'),
+                                                scale_nwp_method=self.params['scale_nwp_method'],
+                                                scale_row_method=self.params['scale_row_method'],
+                                                feature_selection_method=self.params['feature_selection_method'],
+                                                cluster={'cluster_name': self.params['cluster_name'],
+                                                         'cluster_path': self.params['cluster_dir']})
+        X = x[what_data]
+        metadata = mdata[what_data]
+        if not with_target:
+            return X, metadata
+        else:
+            y = self.data_feeder.feed_target(inverse=False)
+            if isinstance(X, pd.DataFrame):
+                X, y = sync_rows(X, y)
+            else:
+                X, y = sync_dict_df(X, y)
+            metadata['dates'] = y.index
+            return X, y, metadata
+
+    def get_rated(self, y):
+        if self.static_data['rated'] is not None:
+            norm_val = 1
+        else:
+            norm_val = y
+        return norm_val
+
+    @staticmethod
+    def get_slice(x, mask, metadata, y=None):
+        dates = metadata['dates']
+        indices = rows_at(dates, mask)
+        y_slice = y.iloc[indices] if y is not None else None
+        if isinstance(x, pd.DataFrame):
+            X_slice = x.iloc[indices]
+        else:
+            raise ValueError('Wrong type of input X for shallow models')
+        return X_slice, y_slice
+
+    def fit(self, cv_masks):
+        self._execution_limits(fitting=True)
+        X, y, metadata = self.load_data(with_target=True)
+        if isinstance(X, dict):
+            for key in sorted(X.keys()):
+                X[key].columns = [f'{key}_{col}' for col in X[key].columns]
+            X_ = pd.concat([X[key] for key in sorted(X.keys())], axis=1)
+            X = X_.copy()
+
+        self.cat_feats = list(set([v_name for v_name in X.columns if len(np.unique(X[v_name].values)) < 30]))
+
+        X[self.cat_feats] = X[self.cat_feats].astype('int')
+        X_train, y_train = self.get_slice(X, cv_masks[0], metadata, y=y)
+        X_val, y_val = self.get_slice(X, cv_masks[1], metadata, y=y)
+        X_test, y_test = self.get_slice(X, cv_masks[2], metadata, y=y)
+        if y_train.shape[0] < 10:
+            self.model = None
+            return 1
+        if self.method in {'lasso', 'RF'}:
+            X_train, y_train_values = X_train.values, y_train.values
+            if y_train_values.shape[1] == 1:
+                y_train_values = y_train_values.ravel()
+            if X_train.shape[0] > 10000 and self.method == 'RF':
+                self.model.set_params(max_samples=int(X_train.shape[0] / 100))
+            self.model.fit(X_train, y_train_values)
+            y_pred = self.model.predict(X_test)
+            y_pred_val = self.model.predict(X_val)
+        elif 'lightgbm' in self.method:
+            X_train, y_train_values = X_train.values, y_train.values
+            if y_train_values.shape[1] == 1:
+                y_train_values = y_train_values.ravel()
+            if self.static_data['horizon_type'] == 'short_term':
+                y_pred, y_pred_val = [], []
+                for col in self.static_data['target_variable']['lags']:
+                    lgbc_fit_params = {
+                        'eval_set': (X_val, y_val.iloc[:, col]),
+                        'eval_metric': 'l1'
+                    }
+                    self.model[f'lgbm_{col}'].fit(X_train, y_train_values[:, col], **lgbc_fit_params)
+                    y_pred.append(np.expand_dims(self.model[f'lgbm_{col}'].predict(X_test), axis=-1))
+                    y_pred_val.append(np.expand_dims(self.model[f'lgbm_{col}'].predict(X_val), axis=-1))
+                y_pred = np.concatenate(y_pred, axis=1)
+                y_pred_val = np.concatenate(y_pred_val, axis=1)
+            else:
+                lgbc_fit_params = {
+                    'eval_set': (X_val, y_val),
+                    'eval_metric': 'l1'
+                }
+                self.model.fit(X_train, y_train_values, **lgbc_fit_params)
+                y_pred = self.model.predict(X_test)
+                y_pred_val = self.model.predict(X_val)
+        elif 'RBF' in self.method:
+            with threadpool_limits(limits=1):
+                if y_train.shape[0] > 1200:
+                    ind = np.random.RandomState(self.static_data.get('split_seed') or 0).choice(
+                        X_train.shape[0], size=1200, replace=False)
+                    X_train = X_train.iloc[ind]
+                    y_train = y_train.iloc[ind]
+                self.model.fit(X_train.values, y_train.values, X_val.values, y_val.values)
+                y_pred = self.model.predict(X_test)
+                y_pred_val = self.model.predict(X_val)
+        else:
+            from catboost import CatBoostRegressor, Pool
+            fit_kwargs = dict(cat_features=self.cat_feats, use_best_model=True, eval_set=[(X_val, y_val)],
+                              verbose=False, early_stopping_rounds=100)
+            try:
+                self.model.fit(X_train, y_train, **fit_kwargs)
+            except Exception as error:
+                # a target with (almost) no variance in some column makes CatBoost refuse the fit:
+                # a tiny jitter on the targets lets it proceed (short_term only)
+                if self.static_data['horizon_type'] != 'short_term':
+                    self.model = None
+                    return 1
+                print(f'CatBoost fit failed ({str(error)[:120]}); retrying with jittered targets')
+                self.model = CatBoostRegressor(thread_count=self.n_jobs, allow_writing_files=False)
+                self.model.set_params(**self.best_params)
+                jitter = lambda frame: frame + pd.DataFrame(np.random.uniform(0, 0.0001, list(frame.shape)),
+                                                            index=frame.index, columns=frame.columns)
+                fit_kwargs['eval_set'] = [(X_val, jitter(y_val))]
+                self.model.fit(X_train, jitter(y_train), **fit_kwargs)
+            y_pred = self._predict_estimator(X_test)
+            y_pred_val = self._predict_estimator(X_val)
+
+        y_test = y_test.values
+        y_val = y_val.values
+        if len(y_pred.shape) != len(y_test.shape):
+            y_test = y_test.ravel()
+        if len(y_pred_val.shape) != len(y_val.shape):
+            y_val = y_val.ravel()
+        norm_test = self.get_rated(y_test)
+        norm_val = self.get_rated(y_val)
+        self.best_mae_test = float(np.mean(np.abs(y_pred - y_test) / norm_test))
+        self.best_mae_val = float(np.mean(np.abs(y_pred_val - y_val) / norm_val))
+        self.sse_test = float(np.sum(np.square((y_pred - y_test) / norm_test)))
+        self.sse_val = float(np.sum(np.square((y_pred_val - y_val) / norm_val)))
+        self.is_trained = True
+        self.save()
+        return self.sse_test
+
+    def predict(self, cluster_dates=None):
+        self._execution_limits()
+        X, metadata = self.load_data()
+        if isinstance(X, dict):
+            for key in sorted(X.keys()):
+                X[key].columns = [f'{key}_{col}' for col in X[key].columns]
+            X_ = pd.concat([X[key] for key in sorted(X.keys())], axis=1)
+            X = X_.copy()
+        X[self.cat_feats] = X[self.cat_feats].astype('int')
+        # The rows predicted are the rows returned: for a long_term case every issue day of the
+        # hours asked for, as the deep models return them.
+        cluster_dates = (metadata['dates'] if cluster_dates is None
+                         else metadata['dates'][rows_at(metadata['dates'], cluster_dates)])
+        X, _ = self.get_slice(X, cluster_dates, metadata)
+        cols = [f'{self.method}_{col}' for col in self.static_data['target_variable']['columns']]
+        if self.model is None:
+            return pd.DataFrame(columns=cols)
+        if cluster_dates.shape[0] > 0:
+            if self.method == 'CatBoost':
+                from catboost import Pool
+                return pd.DataFrame(self._predict_estimator(X), index=cluster_dates, columns=cols)
+            elif self.method == 'lightgbm':
+                if self.static_data['horizon_type'] == 'short_term':
+                    y_pred = []
+                    for col in self.static_data['target_variable']['lags']:
+                        y_pred.append(self.model[f'lgbm_{col}'].predict(X).reshape(-1, 1))
+                    y_pred = np.concatenate(y_pred, axis=1)
+                else:
+                    y_pred = self.model.predict(X)
+                return pd.DataFrame(y_pred, index=cluster_dates, columns=cols)
+            else:
+                return pd.DataFrame(self.model.predict(X.values), index=cluster_dates, columns=cols)
+        else:
+            return pd.DataFrame(columns=cols)
+
+    def _predict_estimator(self, X):
+        if self.method=='CatBoost':
+            from catboost import Pool
+            return self.model.predict(Pool(X,cat_features=self.cat_feats,thread_count=self.n_jobs),
+                                      thread_count=self.n_jobs)
+        return self.model.predict(X)
+
+    def load(self):
+        if os.path.exists(os.path.join(self.path_weights, 'net_weights.pickle')):
+            try:
+                tmp_dict = joblib.load(os.path.join(self.path_weights, 'net_weights.pickle'))
+                self.__dict__.update(tmp_dict)
+            except:
+                raise ImportError('Cannot load weights for cnn model' + self.path_weights)
+        else:
+            raise ImportError('Cannot load weights for cnn model' + self.path_weights)
+
+    def save(self):
+        tmp_dict = {}
+        for k in self.__dict__.keys():
+            if k not in ['static_data', 'path_weights', 'refit']:
+                tmp_dict[k] = self.__dict__[k]
+        joblib.dump(tmp_dict, os.path.join(self.path_weights, 'net_weights.pickle'))
+
+
+if __name__ == '__main__':
+    path_weights = ('/media/sider/data/models/ADMIE/Forecasting_ver0/wind/ΑΓΓΕΛΟΚΑ_ΑΓΓΕΛΟΚΑ/'
+                    'short_term/model_ver1/cluster_organizer/RBF/rule_3/CatBoost/test_1')
+    path_cluster = os.path.dirname(os.path.dirname(path_weights))
+    static_data = joblib.load(os.path.join(path_cluster, 'static_data.pickle'))
+    # from Ptolemaida.short_term_image.configuration.config import config
+    #
+    # from eforecast.init.initialize import initializer
+    # static_data = initializer(config())
+    cv_masks = joblib.load(os.path.join(path_cluster, 'cv_mask.pickle'))
+    cv_masks = [cv_masks[i] for i in [0, 2, 1]]
+    params = joblib.load(os.path.join(path_weights, 'params.pickle'))
+    params['subsample'] = 0.5
+    params['bootstrap_type'] = 'MVS'
+    params['boosting_type'] = 'Plain'
+    model = ShallowModel(static_data, path_weights, params=params, online=False, train=True,
+                         n_jobs=20, refit=True)
+    acc = model.fit(cv_masks)
+    print(acc)

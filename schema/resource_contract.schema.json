@@ -1,0 +1,476 @@
+{
+  "$defs": {
+    "ResourceControls": {
+      "additionalProperties": false,
+      "properties": {
+        "n_cpus": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "CPUs the CPU studies of a run use between them, never more than this process may use.",
+          "title": "N Cpus"
+        },
+        "cpu_workers": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "CPU studies that run side by side. Empty (null): as many as there are studies, up to one a CPU. Trials inside a study stay serial.",
+          "title": "Cpu Workers"
+        },
+        "cpu_study_threads": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Most threads a study uses. Empty (null): the CPUs are divided among the studies running, and a study is given the threads of the ones that finish.",
+          "title": "Cpu Study Threads"
+        },
+        "cpu_study_device": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Device preference of foundation studies: cpu, auto, cuda, cuda:N or a GPU UUID. Empty (null) inherits each family. A preference no visible card answers runs on the CPU.",
+          "title": "Cpu Study Device"
+        }
+      },
+      "title": "ResourceControls",
+      "type": "object"
+    },
+    "ResourcePreview": {
+      "properties": {
+        "controls": {
+          "$ref": "#/$defs/ResourceControls"
+        },
+        "note": {
+          "default": "Requested settings. How many studies run at once and with how many threads is decided when the run starts, from the CPUs the case uses and the studies it has.",
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "controls"
+      ],
+      "title": "ResourcePreview",
+      "type": "object"
+    },
+    "ResourceProgress": {
+      "properties": {
+        "verified_complete": {
+          "title": "Verified Complete",
+          "type": "integer"
+        },
+        "pruned": {
+          "title": "Pruned",
+          "type": "integer"
+        },
+        "failed": {
+          "title": "Failed",
+          "type": "integer"
+        },
+        "elapsed_seconds": {
+          "title": "Elapsed Seconds",
+          "type": "number"
+        },
+        "verified_models_per_minute": {
+          "title": "Verified Models Per Minute",
+          "type": "number"
+        }
+      },
+      "required": [
+        "verified_complete",
+        "pruned",
+        "failed",
+        "elapsed_seconds",
+        "verified_models_per_minute"
+      ],
+      "title": "ResourceProgress",
+      "type": "object"
+    },
+    "ResourceView": {
+      "properties": {
+        "version": {
+          "const": 2,
+          "default": 2,
+          "title": "Version",
+          "type": "integer"
+        },
+        "source": {
+          "default": "legacy",
+          "enum": [
+            "cpu_studies",
+            "gpu_trials",
+            "worker",
+            "legacy"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "updated": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Updated"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Phase"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "running_threads": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Running Threads"
+        },
+        "trial_limit": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trial Limit"
+        },
+        "pss_mb": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pss Mb"
+        },
+        "pss_confidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pss Confidence"
+        },
+        "dispatch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StudyDispatch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "studies": {
+          "items": {
+            "$ref": "#/$defs/StudyResources"
+          },
+          "title": "Studies",
+          "type": "array"
+        },
+        "progress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceProgress"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "title": "ResourceView",
+      "type": "object"
+    },
+    "StudyDispatch": {
+      "description": "How the CPU studies of a run are run side by side.",
+      "properties": {
+        "requested_workers": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Workers"
+        },
+        "effective_workers": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effective Workers"
+        },
+        "requested_threads": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Threads"
+        },
+        "threads_per_study": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threads Per Study"
+        },
+        "requested_total_threads": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Total Threads"
+        },
+        "total_threads": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Threads"
+        },
+        "trials_per_study": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trials Per Study"
+        },
+        "studies": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Studies"
+        }
+      },
+      "title": "StudyDispatch",
+      "type": "object"
+    },
+    "StudyResources": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "method": {
+          "title": "Method",
+          "type": "string"
+        },
+        "cluster": {
+          "title": "Cluster",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "threads": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threads"
+        },
+        "requested_device": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Device"
+        },
+        "resolved_device": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Device"
+        },
+        "normalization": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalization"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "cluster",
+        "state"
+      ],
+      "title": "StudyResources",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "controls": {
+      "$ref": "#/$defs/ResourceControls"
+    },
+    "snapshot": {
+      "$ref": "#/$defs/ResourceView"
+    },
+    "preview": {
+      "$ref": "#/$defs/ResourcePreview"
+    }
+  },
+  "required": [
+    "controls",
+    "snapshot",
+    "preview"
+  ],
+  "title": "ResourceContract",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/joesider9/ProjectPipelineTest/schema/resource_contract.schema.json",
+  "x-case-defaults": {
+    "n_cpus": 16,
+    "cpu_workers": null,
+    "cpu_study_threads": null,
+    "cpu_study_device": null
+  }
+}

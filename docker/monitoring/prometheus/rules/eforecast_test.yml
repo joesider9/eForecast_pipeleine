@@ -1,0 +1,322 @@
+# `promtool test rules` unit tests for the A16-06 alerts.
+#
+# These exist because of a real bug they caught: the compound conditions were first written as
+# `source_up{source="x"} == 1 and <value>`, and `and` in PromQL matches only series with
+# identical label sets -- so those rules could never have fired. A rule nobody has evaluated is
+# not an alert, it is a comment.
+#
+# Every alert that reads a value is tested twice: once with its source up and a bad value (fires),
+# and once with its source *down* (must not fire, because an unreadable source is not a zero).
+#
+# What must stay silent on a workstation -- a broker or a cluster it does not use, an orchestrator
+# between trainings -- is tested on the alert rules themselves (`alert_rule_test`), not on a copy
+# of their expressions. tests/test_monitoring_files.py checks that every alert's own expression
+# appears here, so a copy cannot drift from its rule unnoticed.
+rule_files:
+  - eforecast.yml
+evaluation_interval: 1m
+
+tests:
+  # --------------------------------------------------- an unreadable source is not a zero
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="dispatch"}'
+        values: '0+0x30'
+    promql_expr_test:
+      - expr: eforecast_source_up{source="dispatch"} == 0
+        eval_time: 10m
+        exp_samples:
+          - labels: 'eforecast_source_up{source="dispatch"}'
+            value: 0
+      # No backlog series exists at all, so the backlog condition yields nothing.
+      - expr: eforecast_dispatch_oldest_age_seconds > 600 and on() eforecast_source_up{source="dispatch"} == 1
+        eval_time: 10m
+        exp_samples: []
+
+  # --------------------------------------------------- stuck dispatch, source up
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="dispatch"}'
+        values: '1+0x30'
+      - series: 'eforecast_dispatch_oldest_age_seconds'
+        values: '0+60x30'
+    promql_expr_test:
+      - expr: eforecast_dispatch_oldest_age_seconds > 600 and on() eforecast_source_up{source="dispatch"} == 1
+        eval_time: 5m
+        exp_samples: []                 # 300 seconds old: not yet
+      - expr: eforecast_dispatch_oldest_age_seconds > 600 and on() eforecast_source_up{source="dispatch"} == 1
+        eval_time: 20m
+        exp_samples:
+          - labels: 'eforecast_dispatch_oldest_age_seconds'
+            value: 1200
+
+  # --------------------------------------------------- a healthy backlog fires nothing
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="dispatch"}'
+        values: '1+0x30'
+      - series: 'eforecast_dispatch_oldest_age_seconds'
+        values: '0+0x30'
+      - series: 'eforecast_dispatch_undeliverable'
+        values: '0+0x30'
+    promql_expr_test:
+      - expr: eforecast_dispatch_oldest_age_seconds > 600 and on() eforecast_source_up{source="dispatch"} == 1
+        eval_time: 25m
+        exp_samples: []
+      - expr: eforecast_dispatch_undeliverable > 0 and on() eforecast_source_up{source="dispatch"} == 1
+        eval_time: 25m
+        exp_samples: []
+
+  # --------------------------------------------------- broker: down vs holding deliveries open
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="broker"}'
+        values: '0+0x30'
+      - series: 'eforecast_source_configured{source="broker"}'
+        values: '1+0x30'
+      - series: 'eforecast_queue_unacknowledged{route="local"}'
+        values: '5+0x30'
+    promql_expr_test:
+      - expr: eforecast_source_up{source="broker"} == 0 unless on(source) eforecast_source_configured == 0
+        eval_time: 10m
+        exp_samples:
+          - labels: 'eforecast_source_up{source="broker"}'
+            value: 0
+      # A stale depth from a broker we cannot reach must not raise the held-open alert.
+      - expr: sum(eforecast_queue_unacknowledged) > 0 and on() eforecast_source_up{source="broker"} == 1
+        eval_time: 10m
+        exp_samples: []
+
+  # --------------------------------------------------- no broker on this installation: silent
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="broker"}'
+        values: '0+0x30'
+      - series: 'eforecast_source_configured{source="broker"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: EforecastBrokerUnavailable
+        exp_alerts: []
+
+  # --------------------------------------------------- an exporter too old to say still alerts
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="broker"}'
+        values: '0+0x30'
+    promql_expr_test:
+      - expr: eforecast_source_up{source="broker"} == 0 unless on(source) eforecast_source_configured == 0
+        eval_time: 10m
+        exp_samples:
+          - labels: 'eforecast_source_up{source="broker"}'
+            value: 0
+
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="broker"}'
+        values: '1+0x30'
+      - series: 'eforecast_queue_unacknowledged{route="local"}'
+        values: '3+0x30'
+      - series: 'eforecast_queue_unacknowledged{route="remote"}'
+        values: '0+0x30'
+    promql_expr_test:
+      - expr: sum(eforecast_queue_unacknowledged) > 0 and on() eforecast_source_up{source="broker"} == 1
+        eval_time: 20m
+        exp_samples:
+          - labels: '{}'
+            value: 3
+
+  # --------------------------------------------------- storage pressure as a ratio
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="storage"}'
+        values: '1+0x30'
+      - series: 'eforecast_storage_total_bytes'
+        values: '1000+0x30'
+      - series: 'eforecast_storage_free_bytes'
+        values: '90+0x30'
+    promql_expr_test:
+      - expr: eforecast_storage_free_bytes / eforecast_storage_total_bytes < 0.10 and on() eforecast_source_up{source="storage"} == 1
+        eval_time: 20m
+        exp_samples:
+          - labels: '{}'
+            value: 0.09
+
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="storage"}'
+        values: '1+0x30'
+      - series: 'eforecast_storage_total_bytes'
+        values: '1000+0x30'
+      - series: 'eforecast_storage_free_bytes'
+        values: '500+0x30'
+    promql_expr_test:
+      - expr: eforecast_storage_free_bytes / eforecast_storage_total_bytes < 0.10 and on() eforecast_source_up{source="storage"} == 1
+        eval_time: 20m
+        exp_samples: []
+
+  # --------------------------------------------------- an unmounted workspace is not full-or-fine
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="storage"}'
+        values: '0+0x30'
+    promql_expr_test:
+      - expr: eforecast_source_up{source="storage"} == 0
+        eval_time: 15m
+        exp_samples:
+          - labels: 'eforecast_source_up{source="storage"}'
+            value: 0
+      - expr: eforecast_storage_free_bytes / eforecast_storage_total_bytes < 0.10 and on() eforecast_source_up{source="storage"} == 1
+        eval_time: 15m
+        exp_samples: []
+
+  # --------------------------------------------------- an unschedulable Pod
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="cluster"}'
+        values: '1+0x30'
+      - series: 'eforecast_cluster_pods_pending_seconds'
+        values: '0+120x30'
+    promql_expr_test:
+      - expr: eforecast_cluster_pods_pending_seconds > 900 and on() eforecast_source_up{source="cluster"} == 1
+        eval_time: 5m
+        exp_samples: []
+      - expr: eforecast_cluster_pods_pending_seconds > 900 and on() eforecast_source_up{source="cluster"} == 1
+        eval_time: 20m
+        exp_samples:
+          - labels: 'eforecast_cluster_pods_pending_seconds'
+            value: 2400
+
+  # --------------------------------------------------- the cluster API: given and unreachable vs absent
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="cluster"}'
+        values: '0+0x30'
+      - series: 'eforecast_source_configured{source="cluster"}'
+        values: '1+0x30'
+    promql_expr_test:
+      - expr: eforecast_source_up{source="cluster"} == 0 unless on(source) eforecast_source_configured == 0
+        eval_time: 10m
+        exp_samples:
+          - labels: 'eforecast_source_up{source="cluster"}'
+            value: 0
+
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="cluster"}'
+        values: '0+0x30'
+      - series: 'eforecast_source_configured{source="cluster"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: EforecastClusterApiUnavailable
+        exp_alerts: []
+
+  # --------------------------------------------------- missing telemetry
+  - interval: 1m
+    input_series:
+      - series: 'up{job="dcgm", instance="dcgm-exporter:9400"}'
+        values: '0+0x30'
+      - series: 'up{job="eforecast-app", instance="host:9109"}'
+        values: '1+0x30'
+      - series: 'up{job="orchestrator", instance="host:9108"}'
+        values: '0+0x30'
+    promql_expr_test:
+      - expr: up{job=~"eforecast.*|dcgm|cadvisor"} == 0
+        eval_time: 15m
+        exp_samples:
+          - labels: 'up{job="dcgm", instance="dcgm-exporter:9400"}'
+            value: 0
+
+  # --------------------------------------------------- between trainings: the orchestrator is silent, nothing fires
+  - interval: 1m
+    input_series:
+      - series: 'up{job="dcgm", instance="dcgm-exporter:9400"}'
+        values: '1+0x30'
+      - series: 'up{job="eforecast-app", instance="host:9109"}'
+        values: '1+0x30'
+      - series: 'up{job="orchestrator", instance="host:9108"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: EforecastTelemetryMissing
+        exp_alerts: []
+
+  # --------------------------------------------------- owed cleanup and lost worker contact
+  - interval: 1m
+    input_series:
+      - series: 'eforecast_source_up{source="runs"}'
+        values: '1+0x40'
+      - series: 'eforecast_cleanup_pending'
+        values: '2+0x40'
+      - series: 'eforecast_runs_waiting{wait="worker"}'
+        values: '1+0x40'
+      - series: 'eforecast_runs_waiting{wait="dispatch"}'
+        values: '0+0x40'
+    promql_expr_test:
+      - expr: eforecast_cleanup_pending > 0 and on() eforecast_source_up{source="runs"} == 1
+        eval_time: 35m
+        exp_samples:
+          - labels: 'eforecast_cleanup_pending'
+            value: 2
+      - expr: eforecast_runs_waiting{wait="worker"} > 0 and on() eforecast_source_up{source="runs"} == 1
+        eval_time: 25m
+        exp_samples:
+          - labels: 'eforecast_runs_waiting{wait="worker"}'
+            value: 1
+
+  # --------------------------------------------------- a container of the stack is not running
+  - interval: 1m
+    input_series:
+      - series: 'up{job="cadvisor", instance="cadvisor:8080"}'
+        values: '1+0x30'
+      - series: 'container_last_seen{name="eforecast-postgres-1"}'
+        values: '60+60x30'
+      - series: 'container_last_seen{name="eforecast-grafana-1"}'
+        values: '60+60x30'
+      - series: 'container_last_seen{name="eforecast-dcgm-exporter-1"}'
+        values: '60+60x30'
+    promql_expr_test:
+      - expr: (absent(container_last_seen{name="eforecast-postgres-1"}) or absent(container_last_seen{name="eforecast-grafana-1"}) or absent(container_last_seen{name="eforecast-optuna-dashboard-1"}) or absent(container_last_seen{name="eforecast-dcgm-exporter-1"})) and on() up{job="cadvisor"} == 1
+        eval_time: 10m
+        exp_samples:
+          - labels: '{name="eforecast-optuna-dashboard-1"}'
+            value: 1
+
+  # --------------------------------------------------- cAdvisor down: its own alert, not four of these
+  - interval: 1m
+    input_series:
+      - series: 'up{job="cadvisor", instance="cadvisor:8080"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: EforecastServiceContainerDown
+        exp_alerts: []
+
+  # --------------------------------------------------- a container that keeps restarting
+  - interval: 1m
+    input_series:
+      - series: 'container_start_time_seconds{name="eforecast-grafana-1"}'
+        values: '100x5 400x5 700x5 1000x5 1300x5'
+      - series: 'container_start_time_seconds{name="eforecast-postgres-1"}'
+        values: '100x29'
+    promql_expr_test:
+      - expr: changes(container_start_time_seconds{name=~"eforecast-.+"}[30m]) >= 3
+        eval_time: 25m
+        exp_samples:
+          - labels: '{name="eforecast-grafana-1"}'
+            value: 4
+
+  # --------------------------------------------------- the kernel ended a process in a container
+  - interval: 1m
+    input_series:
+      - series: 'container_oom_events_total{name="eforecast-worker-7"}'
+        values: '0x10 1x19'
+      - series: 'container_oom_events_total{name="eforecast-grafana-1"}'
+        values: '0x29'
+    promql_expr_test:
+      - expr: increase(container_oom_events_total{name!=""}[15m]) > 0
+        eval_time: 15m
+        exp_samples:
+          - labels: '{name="eforecast-worker-7"}'
+            value: 1

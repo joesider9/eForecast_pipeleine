@@ -1,0 +1,56 @@
+# FoundationForecast model image of the eforecast pipeline -- A16-02.
+#
+#   docker build -f docker/Dockerfile.foundation -t eforecast-foundation:a16-02 .
+#
+# Serves Chronos(2), TimesFM, TiRex(2), Timestral, T0, TimeGPT, Toto, Moirai, Sundial,
+# TabPFN, Tafsut, FlowState and PatchTST-FM through one adapter and A16-01's contract.
+#
+# This image exists because the families cannot live in pipe_env: foundationforecast
+# resolves at pandas 2.3.3 and pipe_env runs pandas 3.0.3, and installing it on the host
+# would undo the A13-05 pandas upgrade and bring back the pickle incompatibility that
+# A13-01 closed.  Nothing but `.npy` buffers and JSON crosses the boundary, so the two
+# pandas versions never have to read each other's objects.
+#
+# Unlike Dockerfile.worker this image does NOT need the model tree or the NWP folders at
+# host paths: it is handed one task directory and reads nothing else.
+# The base is pinned by digest, not by tag.  A16-11: a tag can move under us, and a
+# rebuild on a silently different base is the kind of incoherence that shows up as a
+# wrong number rather than an error.  Pinning makes the base part of this file's own
+# content, so the recipe digest covers it.  Update it deliberately.
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    EFORECAST_HOME=/opt/eforecast \
+    HF_HOME=/opt/cache/huggingface \
+    TORCH_HOME=/opt/cache/torch
+
+# libgomp for the tree-based members inside tabpfn-time-series; the rest arrive as wheels
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# the 199-package lock is its own layer, so editing the adapter below never reinstalls torch
+COPY docker/requirements-foundation.txt /tmp/requirements-foundation.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-foundation.txt \
+    && rm /tmp/requirements-foundation.txt
+
+# the caches are mount points: no weights are baked into the image, so the image stays
+# reproducible and A16-02's per-runtime cache isolation stays the host's decision
+RUN mkdir -p /opt/cache/huggingface /opt/cache/torch /opt/task
+
+# Only the stdlib-only contract and the numpy-only adapters belong here.  Copying the whole
+# eforecast package -- as the training worker does -- would be wrong: the pipeline modules
+# are written against pandas 3 and the host stack, and would not import under pandas 2.3.3.
+WORKDIR ${EFORECAST_HOME}
+COPY eforecast/__init__.py ${EFORECAST_HOME}/eforecast/__init__.py
+COPY eforecast/runtime_contract.py ${EFORECAST_HOME}/eforecast/runtime_contract.py
+# the A12 witness chain, so `image_runtime record` can make this image state what it is
+COPY eforecast/image_runtime.py ${EFORECAST_HOME}/eforecast/image_runtime.py
+COPY eforecast/profile_runtime.py ${EFORECAST_HOME}/eforecast/profile_runtime.py
+COPY eforecast/profile_policy.py ${EFORECAST_HOME}/eforecast/profile_policy.py
+COPY eforecast/runtime_adapters ${EFORECAST_HOME}/eforecast/runtime_adapters
+
+ENTRYPOINT ["python"]
+CMD ["-m", "eforecast.runtime_adapters", "--help"]
